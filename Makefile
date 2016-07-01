@@ -95,6 +95,15 @@ LDXX_opt = $(DEFAULT_CXX)
 CPPFLAGS_opt = -O2
 DEFINES_opt = NDEBUG
 
+VALID_CONFIG_Mac = 1
+CC_Mac = $(DEFAULT_CC)
+CXX_Mac = $(DEFAULT_CXX)
+LD_Mac = $(DEFAULT_CC)
+LDXX_Mac = $(DEFAULT_CXX)
+CPPFLAGS_Mac = -O2 -I/usr/local/opt/openssl/include
+LDFLAGS_Mac = -L/usr/local/opt/openssl/lib
+DEFINES_Mac = NDEBUG
+
 VALID_CONFIG_IOS = 1
 CC_IOS = $(DEFAULT_CC)
 CXX_IOS = $(DEFAULT_CXX)
