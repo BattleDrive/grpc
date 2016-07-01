@@ -114,7 +114,7 @@ DEVSDK_IOS=$(shell xcrun -sdk ${PLATFORM_IOS} -show-sdk-path)
 CPPFLAGS_IOS = -O2 -arch arm64 -isysroot $(DEVSDK_IOS) -miphoneos-version-min=9.0
 LDFLAGS_IOS = -arch arm64 -isysroot $(DEVSDK_IOS) -miphoneos-version-min=9.0
 DEFINES_IOS = NDEBUG
-HOST_CONFIG_IOS = opt
+HOST_CONFIG_IOS = Mac
 PROTOBUF_CONFIGURE_FLAGS_IOS += --host=arm-apple-darwin --with-protoc=$(BINDIR)/$(HOST_CONFIG_IOS)/protobuf/protoc
 
 VALID_CONFIG_asan-trace-cmp = 1
