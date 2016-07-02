@@ -100,8 +100,8 @@ CC_Mac = $(DEFAULT_CC)
 CXX_Mac = $(DEFAULT_CXX)
 LD_Mac = $(DEFAULT_CC)
 LDXX_Mac = $(DEFAULT_CXX)
-CPPFLAGS_Mac = -O2 -I/usr/local/opt/openssl/include
-LDFLAGS_Mac = -L/usr/local/opt/openssl/lib
+CPPFLAGS_Mac = -O2 -I$(OPENSSL_INCLUDE)
+LDFLAGS_Mac = -L$(OPENSSL_LIB_MAC)
 DEFINES_Mac = NDEBUG
 
 VALID_CONFIG_IOS = 1
@@ -111,8 +111,8 @@ LD_IOS = $(DEFAULT_CC)
 LDXX_IOS = $(DEFAULT_CXX)
 PLATFORM_IOS ?= iphoneos
 DEVSDK_IOS=$(shell xcrun -sdk ${PLATFORM_IOS} -show-sdk-path)
-CPPFLAGS_IOS = -O2 -arch arm64 -isysroot $(DEVSDK_IOS) -miphoneos-version-min=9.0
-LDFLAGS_IOS = -arch arm64 -isysroot $(DEVSDK_IOS) -miphoneos-version-min=9.0
+CPPFLAGS_IOS = -O2 -arch arm64 -isysroot $(DEVSDK_IOS) -miphoneos-version-min=9.0 -I$(OPENSSL_INCLUDE)
+LDFLAGS_IOS = -arch arm64 -isysroot $(DEVSDK_IOS) -miphoneos-version-min=9.0 -L$(OPENSSL_LIB_IOS)
 DEFINES_IOS = NDEBUG
 HOST_CONFIG_IOS = Mac
 PROTOBUF_CONFIGURE_FLAGS_IOS += --host=arm-apple-darwin --with-protoc=$(BINDIR)/$(HOST_CONFIG_IOS)/protobuf/protoc
