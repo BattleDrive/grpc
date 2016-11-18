@@ -44,7 +44,7 @@ require 'facter'
 require 'client'
 require 'qps-common'
 require 'server'
-require 'src/proto/grpc/testing/services_services'
+require 'src/proto/grpc/testing/services_services_pb'
 
 class WorkerServiceImpl < Grpc::Testing::WorkerService::Service
   def cpu_cores
@@ -64,8 +64,8 @@ class WorkerServiceImpl < Grpc::Testing::WorkerService::Service
           q.push(gtss.new(stats: bms.mark(req.mark.reset), cores: cpu_cores))
         end
       end
-      q.push(self)
       bms.stop
+      q.push(self)
     }
     q.each_item
   end
@@ -83,8 +83,8 @@ class WorkerServiceImpl < Grpc::Testing::WorkerService::Service
                                                    client.mark(req.mark.reset)))
         end
       end
-      q.push(self)
       client.shutdown
+      q.push(self)
     }
     q.each_item
   end
@@ -118,6 +118,10 @@ def main
       options['server_port'] = v
     end
   end.parse!
+
+  # Configure any errors with client or server child threads to surface
+  Thread.abort_on_exception = true
+  
   s = GRPC::RpcServer.new
   s.add_http2_port("0.0.0.0:" + options['driver_port'].to_s,
                    :this_port_is_insecure)

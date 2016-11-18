@@ -38,9 +38,9 @@ $LOAD_PATH.unshift(this_dir) unless $LOAD_PATH.include?(this_dir)
 
 require 'grpc'
 require 'qps-common'
-require 'src/proto/grpc/testing/messages'
-require 'src/proto/grpc/testing/services_services'
-require 'src/proto/grpc/testing/stats'
+require 'src/proto/grpc/testing/messages_pb'
+require 'src/proto/grpc/testing/services_services_pb'
+require 'src/proto/grpc/testing/stats_pb'
 
 class BenchmarkServiceImpl < Grpc::Testing::BenchmarkService::Service
   def unary_call(req, _call)
@@ -49,16 +49,7 @@ class BenchmarkServiceImpl < Grpc::Testing::BenchmarkService::Service
     sr.new(payload: pl.new(body: nulls(req.response_size)))
   end
   def streaming_call(reqs)
-    q = EnumeratorQueue.new(self)
-    Thread.new {
-      sr = Grpc::Testing::SimpleResponse
-      pl = Grpc::Testing::Payload
-      reqs.each do |req|
-        q.push(sr.new(payload: pl.new(body: nulls(req.response_size))))
-      end
-      q.push(self)
-    }
-    q.each_item
+    PingPongEnumerator.new(reqs).each_item
   end
 end
 
@@ -71,7 +62,8 @@ class BenchmarkServer
     else
       cred = :this_port_is_insecure
     end
-    @server = GRPC::RpcServer.new
+    # Make sure server can handle the large number of calls in benchmarks
+    @server = GRPC::RpcServer.new(pool_size: 100, max_waiting_requests: 100)
     @port = @server.add_http2_port("0.0.0.0:" + port.to_s, cred)
     @server.handle(BenchmarkServiceImpl.new)
     @start_time = Time.now

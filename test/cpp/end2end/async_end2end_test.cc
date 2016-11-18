@@ -345,6 +345,31 @@ TEST_P(AsyncEnd2endTest, SequentialRpcs) {
   SendRpc(10);
 }
 
+// We do not need to protect notify because the use is synchronized.
+void ServerWait(Server* server, int* notify) {
+  server->Wait();
+  *notify = 1;
+}
+TEST_P(AsyncEnd2endTest, WaitAndShutdownTest) {
+  int notify = 0;
+  std::thread* wait_thread =
+      new std::thread(&ServerWait, server_.get(), &notify);
+  ResetStub();
+  SendRpc(1);
+  EXPECT_EQ(0, notify);
+  server_->Shutdown();
+  wait_thread->join();
+  EXPECT_EQ(1, notify);
+  delete wait_thread;
+}
+
+TEST_P(AsyncEnd2endTest, ShutdownThenWait) {
+  ResetStub();
+  SendRpc(1);
+  server_->Shutdown();
+  server_->Wait();
+}
+
 // Test a simple RPC using the async version of Next
 TEST_P(AsyncEnd2endTest, AsyncNextRpc) {
   ResetStub();
@@ -873,8 +898,8 @@ TEST_P(AsyncEnd2endTest, UnimplementedRpc) {
       GetChannelCredentials(GetParam().credentials_type, &args);
   std::shared_ptr<Channel> channel =
       CreateCustomChannel(server_address_.str(), channel_creds, args);
-  std::unique_ptr<grpc::testing::UnimplementedService::Stub> stub;
-  stub = grpc::testing::UnimplementedService::NewStub(channel);
+  std::unique_ptr<grpc::testing::UnimplementedEchoService::Stub> stub;
+  stub = grpc::testing::UnimplementedEchoService::NewStub(channel);
   EchoRequest send_request;
   EchoResponse recv_response;
   Status recv_status;

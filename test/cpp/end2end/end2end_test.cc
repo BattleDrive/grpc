@@ -967,8 +967,8 @@ TEST_P(End2endTest, ChannelStateTimeout) {
 // Talking to a non-existing service.
 TEST_P(End2endTest, NonExistingService) {
   ResetChannel();
-  std::unique_ptr<grpc::testing::UnimplementedService::Stub> stub;
-  stub = grpc::testing::UnimplementedService::NewStub(channel_);
+  std::unique_ptr<grpc::testing::UnimplementedEchoService::Stub> stub;
+  stub = grpc::testing::UnimplementedEchoService::NewStub(channel_);
 
   EchoRequest request;
   EchoResponse response;
@@ -1166,6 +1166,9 @@ TEST_P(ProxyEnd2endTest, HugeResponse) {
   request.mutable_param()->set_response_message_length(kResponseSize);
 
   ClientContext context;
+  std::chrono::system_clock::time_point deadline =
+      std::chrono::system_clock::now() + std::chrono::seconds(20);
+  context.set_deadline(deadline);
   Status s = stub_->Echo(&context, request, &response);
   EXPECT_EQ(kResponseSize, response.message().size());
   EXPECT_TRUE(s.ok());
