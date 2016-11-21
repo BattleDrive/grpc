@@ -319,6 +319,7 @@ static void win_write(grpc_exec_ctx *exec_ctx, grpc_endpoint *ep,
                             ? GRPC_ERROR_NONE
                             : GRPC_WSA_ERROR(info->wsa_error, "WSASend");
     grpc_exec_ctx_sched(exec_ctx, cb, error, NULL);
+    if (allocated) gpr_free(allocated);
     return;
   }
 
@@ -389,9 +390,16 @@ static char *win_get_peer(grpc_endpoint *ep) {
   return gpr_strdup(tcp->peer_string);
 }
 
-static grpc_endpoint_vtable vtable = {
-    win_read,     win_write,   win_add_to_pollset, win_add_to_pollset_set,
-    win_shutdown, win_destroy, win_get_peer};
+static grpc_workqueue *win_get_workqueue(grpc_endpoint *ep) { return NULL; }
+
+static grpc_endpoint_vtable vtable = {win_read,
+                                      win_write,
+                                      win_get_workqueue,
+                                      win_add_to_pollset,
+                                      win_add_to_pollset_set,
+                                      win_shutdown,
+                                      win_destroy,
+                                      win_get_peer};
 
 grpc_endpoint *grpc_tcp_create(grpc_winsocket *socket, char *peer_string) {
   grpc_tcp *tcp = (grpc_tcp *)gpr_malloc(sizeof(grpc_tcp));

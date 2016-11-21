@@ -125,6 +125,35 @@ class CSharpLanguage:
     return 'csharp'
 
 
+class CSharpCoreCLRLanguage:
+
+  def __init__(self):
+    self.client_cwd = 'src/csharp/Grpc.IntegrationTesting.Client/bin/Debug/netcoreapp1.0'
+    self.server_cwd = 'src/csharp/Grpc.IntegrationTesting.Server/bin/Debug/netcoreapp1.0'
+    self.safename = str(self)
+
+  def client_cmd(self, args):
+    return ['dotnet', 'exec', 'Grpc.IntegrationTesting.Client.dll'] + args
+
+  def cloud_to_prod_env(self):
+    return {}
+
+  def server_cmd(self, args):
+    return ['dotnet', 'exec', 'Grpc.IntegrationTesting.Server.dll', '--use_tls=true'] + args
+
+  def global_env(self):
+    return {}
+
+  def unimplemented_test_cases(self):
+    return _SKIP_SERVER_COMPRESSION
+
+  def unimplemented_test_cases_server(self):
+    return _SKIP_COMPRESSION
+
+  def __str__(self):
+    return 'csharpcoreclr'
+
+
 class JavaLanguage:
 
   def __init__(self):
@@ -266,6 +295,31 @@ class PHPLanguage:
     return 'php'
 
 
+class PHP7Language:
+
+  def __init__(self):
+    self.client_cwd = None
+    self.safename = str(self)
+
+  def client_cmd(self, args):
+    return ['src/php/bin/interop_client.sh'] + args
+
+  def cloud_to_prod_env(self):
+    return {}
+
+  def global_env(self):
+    return {}
+
+  def unimplemented_test_cases(self):
+    return _SKIP_COMPRESSION
+
+  def unimplemented_test_cases_server(self):
+    return []
+
+  def __str__(self):
+    return 'php7'
+
+
 class RubyLanguage:
 
   def __init__(self):
@@ -304,8 +358,11 @@ class PythonLanguage:
 
   def client_cmd(self, args):
     return [
-        'tox -einterop_client --',
-        ' '.join(args)
+        'py27/bin/python',
+        'src/python/grpcio_tests/setup.py',
+        'run_interop',
+        '--client',
+        '--args="{}"'.format(' '.join(args))
     ]
 
   def cloud_to_prod_env(self):
@@ -313,8 +370,11 @@ class PythonLanguage:
 
   def server_cmd(self, args):
     return [
-        'tox -einterop_server --',
-        ' '.join(args) + ' --use_tls=true'
+        'py27/bin/python',
+        'src/python/grpcio_tests/setup.py',
+        'run_interop',
+        '--server',
+        '--args="{}"'.format(' '.join(args) + ' --use_tls=true')
     ]
 
   def global_env(self):
@@ -334,16 +394,18 @@ class PythonLanguage:
 _LANGUAGES = {
     'c++' : CXXLanguage(),
     'csharp' : CSharpLanguage(),
+    'csharpcoreclr' : CSharpCoreCLRLanguage(),
     'go' : GoLanguage(),
     'java' : JavaLanguage(),
     'node' : NodeLanguage(),
     'php' :  PHPLanguage(),
+    'php7' :  PHP7Language(),
     'ruby' : RubyLanguage(),
     'python' : PythonLanguage(),
 }
 
 # languages supported as cloud_to_cloud servers
-_SERVERS = ['c++', 'node', 'csharp', 'java', 'go', 'ruby', 'python']
+_SERVERS = ['c++', 'node', 'csharp', 'csharpcoreclr', 'java', 'go', 'ruby', 'python']
 
 _TEST_CASES = ['large_unary', 'empty_unary', 'ping_pong',
                'empty_stream', 'client_streaming', 'server_streaming',
@@ -401,7 +463,7 @@ def auth_options(language, test_case):
   default_account_arg = '--default_service_account=830293263384-compute@developer.gserviceaccount.com'
 
   if test_case in ['jwt_token_creds', 'per_rpc_creds', 'oauth2_auth_token']:
-    if language in ['csharp', 'node', 'php', 'python', 'ruby']:
+    if language in ['csharp', 'csharpcoreclr', 'node', 'php', 'php7', 'python', 'ruby']:
       env['GOOGLE_APPLICATION_CREDENTIALS'] = key_filepath
     else:
       cmdargs += [key_file_arg]
@@ -470,7 +532,8 @@ def cloud_to_prod_jobspec(language, test_case, server_host_name,
           flake_retries=5 if args.allow_flakes else 0,
           timeout_retries=2 if args.allow_flakes else 0,
           kill_handler=_job_kill_handler)
-  test_job.container_name = container_name
+  if docker_image:
+    test_job.container_name = container_name
   return test_job
 
 
@@ -506,7 +569,8 @@ def cloud_to_cloud_jobspec(language, test_case, server_name, server_host,
           flake_retries=5 if args.allow_flakes else 0,
           timeout_retries=2 if args.allow_flakes else 0,
           kill_handler=_job_kill_handler)
-  test_job.container_name = container_name
+  if docker_image:
+    test_job.container_name = container_name
   return test_job
 
 

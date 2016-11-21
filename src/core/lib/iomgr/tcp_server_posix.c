@@ -134,19 +134,21 @@ struct grpc_tcp_server {
   size_t pollset_count;
 
   /* next pollset to assign a channel to */
-  size_t next_pollset_to_assign;
+  gpr_atm next_pollset_to_assign;
 };
 
 static gpr_once check_init = GPR_ONCE_INIT;
-static bool has_so_reuseport;
+static bool has_so_reuseport = false;
 
 static void init(void) {
+#ifndef GPR_MANYLINUX1
   int s = socket(AF_INET, SOCK_STREAM, 0);
   if (s >= 0) {
     has_so_reuseport = GRPC_LOG_IF_ERROR("check for SO_REUSEPORT",
                                          grpc_set_socket_reuse_port(s, 1));
     close(s);
   }
+#endif
 }
 
 grpc_error *grpc_tcp_server_create(grpc_closure *shutdown_complete,
@@ -181,7 +183,7 @@ grpc_error *grpc_tcp_server_create(grpc_closure *shutdown_complete,
   s->head = NULL;
   s->tail = NULL;
   s->nports = 0;
-  s->next_pollset_to_assign = 0;
+  gpr_atm_no_barrier_store(&s->next_pollset_to_assign, 0);
   *server = s;
   return GRPC_ERROR_NONE;
 }
@@ -369,7 +371,8 @@ static void on_read(grpc_exec_ctx *exec_ctx, void *arg, grpc_error *err) {
   }
 
   read_notifier_pollset =
-      sp->server->pollsets[(sp->server->next_pollset_to_assign++) %
+      sp->server->pollsets[(size_t)gpr_atm_no_barrier_fetch_add(
+                               &sp->server->next_pollset_to_assign, 1) %
                            sp->server->pollset_count];
 
   /* loop until accept4 returns EAGAIN, and then re-arm notification */
@@ -490,7 +493,8 @@ static grpc_error *clone_port(grpc_tcp_listener *listener, unsigned count) {
   }
 
   for (unsigned i = 0; i < count; i++) {
-    int fd, port;
+    int fd = -1;
+    int port = -1;
     grpc_dualstack_mode dsmode;
     err = grpc_create_dualstack_socket(&listener->addr.sockaddr, SOCK_STREAM, 0,
                                        &dsmode, &fd);
