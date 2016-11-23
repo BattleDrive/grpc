@@ -106,3 +106,11 @@ The abstract protocol defined above is implemented over [HTTP/2](https://http2.g
 
 ## Flow Control
 gRPC inherits the flow control mechanisms in HTTP/2 and uses them to enable fine-grained control of the amount of memory used for buffering in-flight messages.
+
+# Build for linux with clang
+http://stackoverflow.com/a/7033347/941045
+env:
+CC=/usr/bin/clang
+CXX=/usr/bin/clang++
+CMAKE_CXX_COMPILER=/usr/bin/clang++
+CMAKE_C_COMPILER=/usr/bin/clang
