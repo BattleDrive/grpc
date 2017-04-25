@@ -1,3 +1,9 @@
+# This file has been automatically generated from a template file.
+# Please make modifications to
+# `templates/gRPC-ProtoRPC.podspec.template` instead. This file can be
+# regenerated from the template by running
+# `tools/buildgen/generate_projects.sh`.
+
 # Copyright 2015, Google Inc.
 # All rights reserved.
 #
@@ -30,7 +36,7 @@
 
 Pod::Spec.new do |s|
   s.name     = 'gRPC-ProtoRPC'
-  version = '1.0.1'
+  version = '1.3.0-pre1'
   s.version  = version
   s.summary  = 'RPC library for Protocol Buffers, based on gRPC'
   s.homepage = 'http://www.grpc.io'
@@ -42,7 +48,7 @@ Pod::Spec.new do |s|
     :tag => "v#{version}",
   }
 
-  s.ios.deployment_target = '7.1'
+  s.ios.deployment_target = '7.0'
   s.osx.deployment_target = '10.9'
 
   name = 'ProtoRPC'

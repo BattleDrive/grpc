@@ -77,8 +77,9 @@ static void test_check(void) {
   grpc_error *error;
   gpr_log(GPR_DEBUG, "test_check");
   grpc_connectivity_state_init(&tracker, GRPC_CHANNEL_IDLE, "xxx");
-  GPR_ASSERT(grpc_connectivity_state_check(&tracker, &error) ==
+  GPR_ASSERT(grpc_connectivity_state_get(&tracker, &error) ==
              GRPC_CHANNEL_IDLE);
+  GPR_ASSERT(grpc_connectivity_state_check(&tracker) == GRPC_CHANNEL_IDLE);
   GPR_ASSERT(error == GRPC_ERROR_NONE);
   grpc_connectivity_state_destroy(&exec_ctx, &tracker);
   grpc_exec_ctx_finish(&exec_ctx);
@@ -86,7 +87,8 @@ static void test_check(void) {
 
 static void test_subscribe_then_unsubscribe(void) {
   grpc_connectivity_state_tracker tracker;
-  grpc_closure *closure = grpc_closure_create(must_fail, THE_ARG);
+  grpc_closure *closure =
+      grpc_closure_create(must_fail, THE_ARG, grpc_schedule_on_exec_ctx);
   grpc_connectivity_state state = GRPC_CHANNEL_IDLE;
   grpc_exec_ctx exec_ctx = GRPC_EXEC_CTX_INIT;
   gpr_log(GPR_DEBUG, "test_subscribe_then_unsubscribe");
@@ -109,7 +111,8 @@ static void test_subscribe_then_unsubscribe(void) {
 
 static void test_subscribe_then_destroy(void) {
   grpc_connectivity_state_tracker tracker;
-  grpc_closure *closure = grpc_closure_create(must_succeed, THE_ARG);
+  grpc_closure *closure =
+      grpc_closure_create(must_succeed, THE_ARG, grpc_schedule_on_exec_ctx);
   grpc_connectivity_state state = GRPC_CHANNEL_IDLE;
   grpc_exec_ctx exec_ctx = GRPC_EXEC_CTX_INIT;
   gpr_log(GPR_DEBUG, "test_subscribe_then_destroy");
@@ -128,7 +131,8 @@ static void test_subscribe_then_destroy(void) {
 
 static void test_subscribe_with_failure_then_destroy(void) {
   grpc_connectivity_state_tracker tracker;
-  grpc_closure *closure = grpc_closure_create(must_fail, THE_ARG);
+  grpc_closure *closure =
+      grpc_closure_create(must_fail, THE_ARG, grpc_schedule_on_exec_ctx);
   grpc_connectivity_state state = GRPC_CHANNEL_SHUTDOWN;
   grpc_exec_ctx exec_ctx = GRPC_EXEC_CTX_INIT;
   gpr_log(GPR_DEBUG, "test_subscribe_with_failure_then_destroy");

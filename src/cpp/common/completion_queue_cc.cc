@@ -43,11 +43,26 @@ namespace grpc {
 
 static internal::GrpcLibraryInitializer g_gli_initializer;
 
-CompletionQueue::CompletionQueue(grpc_completion_queue* take) : cq_(take) {}
+// 'CompletionQueue' constructor can safely call GrpcLibraryCodegen(false) here
+// i.e not have GrpcLibraryCodegen call grpc_init(). This is because, to create
+// a 'grpc_completion_queue' instance (which is being passed as the input to
+// this constructor), one must have already called grpc_init().
+CompletionQueue::CompletionQueue(grpc_completion_queue* take)
+    : GrpcLibraryCodegen(false), cq_(take) {
+  InitialAvalanching();
+}
 
 void CompletionQueue::Shutdown() {
   g_gli_initializer.summon();
-  grpc_completion_queue_shutdown(cq_);
+  CompleteAvalanching();
+}
+
+void CompletionQueue::CompleteAvalanching() {
+  // Check if this was the last avalanching operation
+  if (gpr_atm_no_barrier_fetch_add(&avalanches_in_flight_,
+                                   static_cast<gpr_atm>(-1)) == 1) {
+    grpc_completion_queue_shutdown(cq_);
+  }
 }
 
 CompletionQueue::NextStatus CompletionQueue::AsyncNextInternal(

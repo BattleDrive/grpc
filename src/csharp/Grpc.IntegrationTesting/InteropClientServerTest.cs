@@ -56,7 +56,8 @@ namespace Grpc.IntegrationTesting
         [TestFixtureSetUp]
         public void Init()
         {
-            server = new Server
+            // Disable SO_REUSEPORT to prevent https://github.com/grpc/grpc/issues/10755
+            server = new Server(new[] { new ChannelOption(ChannelOptions.SoReuseport, 0) })
             {
                 Services = { TestService.BindService(new TestServiceImpl()) },
                 Ports = { { Host, ServerPort.PickUnused, TestCredentials.CreateSslServerCredentials() } }
@@ -146,9 +147,15 @@ namespace Grpc.IntegrationTesting
         }
 
         [Test]
+        public void UnimplementedService()
+        {
+            InteropClient.RunUnimplementedService(new UnimplementedService.UnimplementedServiceClient(channel));
+        }
+
+        [Test]
         public void UnimplementedMethod()
         {
-            InteropClient.RunUnimplementedMethod(new UnimplementedService.UnimplementedServiceClient(channel));
+            InteropClient.RunUnimplementedMethod(client);
         }
     }
 }

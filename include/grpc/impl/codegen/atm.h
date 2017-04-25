@@ -75,6 +75,9 @@
    int gpr_atm_no_barrier_cas(gpr_atm *p, gpr_atm o, gpr_atm n);
    int gpr_atm_acq_cas(gpr_atm *p, gpr_atm o, gpr_atm n);
    int gpr_atm_rel_cas(gpr_atm *p, gpr_atm o, gpr_atm n);
+
+   // Atomically, set *p=n and return the old value of *p
+   gpr_atm gpr_atm_full_xchg(gpr_atm *p, gpr_atm n);
 */
 
 #include <grpc/impl/codegen/port_platform.h>
@@ -88,5 +91,10 @@
 #else
 #error could not determine platform for atm
 #endif
+
+/** Adds \a delta to \a *value, clamping the result to the range specified
+    by \a min and \a max.  Returns the new value. */
+gpr_atm gpr_atm_no_barrier_clamped_add(gpr_atm *value, gpr_atm delta,
+                                       gpr_atm min, gpr_atm max);
 
 #endif /* GRPC_IMPL_CODEGEN_ATM_H */

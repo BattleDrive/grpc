@@ -1,4 +1,4 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python
 # Copyright 2015, Google Inc.
 # All rights reserved.
 #
@@ -29,11 +29,11 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """Run stress test in C++"""
 
+from __future__ import print_function
+
 import argparse
 import atexit
-import dockerjob
 import itertools
-import jobset
 import json
 import multiprocessing
 import os
@@ -43,6 +43,10 @@ import sys
 import tempfile
 import time
 import uuid
+import six
+
+import python_utils.dockerjob as dockerjob
+import python_utils.jobset as jobset
 
 # Docker doesn't clean up after itself, so we do it on exit.
 atexit.register(lambda: subprocess.call(['stty', 'echo']))
@@ -93,7 +97,7 @@ def docker_run_cmdline(cmdline, image, docker_args=[], cwd=None, environ=None):
 
   # turn environ into -e docker args
   if environ:
-    for k, v in environ.iteritems():
+    for k, v in environ.items():
       docker_cmdline += ['-e', '%s=%s' % (k, v)]
 
   # set working directory
@@ -140,7 +144,7 @@ def cloud_to_cloud_jobspec(language,
       '--num_channels_per_server=%s' % num_channels_per_server,
       '--metrics_port=%s' % metrics_port
   ]))
-  print cmdline
+  print(cmdline)
   cwd = language.client_cwd
   environ = language.global_env()
   if docker_image:
@@ -236,9 +240,8 @@ servers = set(
     for s in itertools.chain.from_iterable(_SERVERS if x == 'all' else [x]
                                            for x in args.server))
 
-languages = set(_LANGUAGES[l]
-                for l in itertools.chain.from_iterable(_LANGUAGES.iterkeys(
-                ) if x == 'all' else [x] for x in args.language))
+languages = set(_LANGUAGES[l] for l in itertools.chain.from_iterable(
+  six.iterkeys(_LANGUAGES) if x == 'all' else [x] for x in args.language))
 
 docker_images = {}
 # languages for which to build docker images
@@ -264,7 +267,7 @@ if build_jobs:
     jobset.message('FAILED',
                    'Failed to build interop docker images.',
                    do_newline=True)
-    for image in docker_images.itervalues():
+    for image in six.itervalues(docker_images):
       dockerjob.remove_image(image, skip_nonexistent=True)
     sys.exit(1)
 
@@ -287,7 +290,7 @@ try:
     (server_host, server_port) = server[1].split(':')
     server_addresses[server_name] = (server_host, server_port)
 
-  for server_name, server_address in server_addresses.iteritems():
+  for server_name, server_address in server_addresses.items():
     (server_host, server_port) = server_address
     for language in languages:
       test_job = cloud_to_cloud_jobspec(
@@ -302,8 +305,8 @@ try:
       jobs.append(test_job)
 
   if not jobs:
-    print 'No jobs to run.'
-    for image in docker_images.itervalues():
+    print('No jobs to run.')
+    for image in six.itervalues(docker_images):
       dockerjob.remove_image(image, skip_nonexistent=True)
     sys.exit(1)
 
@@ -317,12 +320,12 @@ try:
 
 finally:
   # Check if servers are still running.
-  for server, job in server_jobs.iteritems():
+  for server, job in server_jobs.items():
     if not job.is_running():
-      print 'Server "%s" has exited prematurely.' % server
+      print('Server "%s" has exited prematurely.' % server)
 
-  dockerjob.finish_jobs([j for j in server_jobs.itervalues()])
+  dockerjob.finish_jobs([j for j in six.itervalues(server_jobs)])
 
-  for image in docker_images.itervalues():
-    print 'Removing docker image %s' % image
+  for image in six.itervalues(docker_images):
+    print('Removing docker image %s' % image)
     dockerjob.remove_image(image)

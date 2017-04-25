@@ -31,6 +31,11 @@
  *
  */
 
+#include "src/core/lib/iomgr/port.h"
+
+// This test only works with the generic timer implementation
+#ifdef GRPC_TIMER_USE_GENERIC
+
 #include "src/core/lib/iomgr/timer.h"
 
 #include <string.h>
@@ -39,6 +44,9 @@
 #include "test/core/util/test_config.h"
 
 #define MAX_CB 30
+
+extern int grpc_timer_trace;
+extern int grpc_timer_check_trace;
 
 static int cb_called[MAX_CB][2];
 
@@ -52,22 +60,29 @@ static void add_test(void) {
   grpc_timer timers[20];
   grpc_exec_ctx exec_ctx = GRPC_EXEC_CTX_INIT;
 
+  gpr_log(GPR_INFO, "add_test");
+
   grpc_timer_list_init(start);
+  grpc_timer_trace = 1;
+  grpc_timer_check_trace = 1;
   memset(cb_called, 0, sizeof(cb_called));
 
   /* 10 ms timers.  will expire in the current epoch */
   for (i = 0; i < 10; i++) {
-    grpc_timer_init(&exec_ctx, &timers[i],
-                    gpr_time_add(start, gpr_time_from_millis(10, GPR_TIMESPAN)),
-                    cb, (void *)(intptr_t)i, start);
+    grpc_timer_init(
+        &exec_ctx, &timers[i],
+        gpr_time_add(start, gpr_time_from_millis(10, GPR_TIMESPAN)),
+        grpc_closure_create(cb, (void *)(intptr_t)i, grpc_schedule_on_exec_ctx),
+        start);
   }
 
   /* 1010 ms timers.  will expire in the next epoch */
   for (i = 10; i < 20; i++) {
     grpc_timer_init(
         &exec_ctx, &timers[i],
-        gpr_time_add(start, gpr_time_from_millis(1010, GPR_TIMESPAN)), cb,
-        (void *)(intptr_t)i, start);
+        gpr_time_add(start, gpr_time_from_millis(1010, GPR_TIMESPAN)),
+        grpc_closure_create(cb, (void *)(intptr_t)i, grpc_schedule_on_exec_ctx),
+        start);
   }
 
   /* collect timers.  Only the first batch should be ready. */
@@ -112,9 +127,7 @@ static void add_test(void) {
 }
 
 static gpr_timespec tfm(int m) {
-  gpr_timespec t = gpr_time_from_millis(m, GPR_TIMESPAN);
-  t.clock_type = GPR_CLOCK_REALTIME;
-  return t;
+  return gpr_time_from_millis(m, GPR_CLOCK_REALTIME);
 }
 
 /* Cleaning up a list with pending timers. */
@@ -122,19 +135,33 @@ void destruction_test(void) {
   grpc_timer timers[5];
   grpc_exec_ctx exec_ctx = GRPC_EXEC_CTX_INIT;
 
+  gpr_log(GPR_INFO, "destruction_test");
+
   grpc_timer_list_init(gpr_time_0(GPR_CLOCK_REALTIME));
+  grpc_timer_trace = 1;
+  grpc_timer_check_trace = 1;
   memset(cb_called, 0, sizeof(cb_called));
 
-  grpc_timer_init(&exec_ctx, &timers[0], tfm(100), cb, (void *)(intptr_t)0,
-                  gpr_time_0(GPR_CLOCK_REALTIME));
-  grpc_timer_init(&exec_ctx, &timers[1], tfm(3), cb, (void *)(intptr_t)1,
-                  gpr_time_0(GPR_CLOCK_REALTIME));
-  grpc_timer_init(&exec_ctx, &timers[2], tfm(100), cb, (void *)(intptr_t)2,
-                  gpr_time_0(GPR_CLOCK_REALTIME));
-  grpc_timer_init(&exec_ctx, &timers[3], tfm(3), cb, (void *)(intptr_t)3,
-                  gpr_time_0(GPR_CLOCK_REALTIME));
-  grpc_timer_init(&exec_ctx, &timers[4], tfm(1), cb, (void *)(intptr_t)4,
-                  gpr_time_0(GPR_CLOCK_REALTIME));
+  grpc_timer_init(
+      &exec_ctx, &timers[0], tfm(100),
+      grpc_closure_create(cb, (void *)(intptr_t)0, grpc_schedule_on_exec_ctx),
+      gpr_time_0(GPR_CLOCK_REALTIME));
+  grpc_timer_init(
+      &exec_ctx, &timers[1], tfm(3),
+      grpc_closure_create(cb, (void *)(intptr_t)1, grpc_schedule_on_exec_ctx),
+      gpr_time_0(GPR_CLOCK_REALTIME));
+  grpc_timer_init(
+      &exec_ctx, &timers[2], tfm(100),
+      grpc_closure_create(cb, (void *)(intptr_t)2, grpc_schedule_on_exec_ctx),
+      gpr_time_0(GPR_CLOCK_REALTIME));
+  grpc_timer_init(
+      &exec_ctx, &timers[3], tfm(3),
+      grpc_closure_create(cb, (void *)(intptr_t)3, grpc_schedule_on_exec_ctx),
+      gpr_time_0(GPR_CLOCK_REALTIME));
+  grpc_timer_init(
+      &exec_ctx, &timers[4], tfm(1),
+      grpc_closure_create(cb, (void *)(intptr_t)4, grpc_schedule_on_exec_ctx),
+      gpr_time_0(GPR_CLOCK_REALTIME));
   GPR_ASSERT(1 == grpc_timer_check(&exec_ctx, tfm(2), NULL));
   grpc_exec_ctx_finish(&exec_ctx);
   GPR_ASSERT(1 == cb_called[4][1]);
@@ -152,7 +179,14 @@ void destruction_test(void) {
 
 int main(int argc, char **argv) {
   grpc_test_init(argc, argv);
+  gpr_set_log_verbosity(GPR_LOG_SEVERITY_DEBUG);
   add_test();
   destruction_test();
   return 0;
 }
+
+#else /* GRPC_TIMER_USE_GENERIC */
+
+int main(int argc, char **argv) { return 1; }
+
+#endif /* GRPC_TIMER_USE_GENERIC */

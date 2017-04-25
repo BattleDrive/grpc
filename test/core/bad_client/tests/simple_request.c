@@ -114,11 +114,11 @@ static void verifier(grpc_server *server, grpc_completion_queue *cq,
   error = grpc_server_request_call(server, &s, &call_details,
                                    &request_metadata_recv, cq, cq, tag(101));
   GPR_ASSERT(GRPC_CALL_OK == error);
-  cq_expect_completion(cqv, tag(101), 1);
+  CQ_EXPECT_COMPLETION(cqv, tag(101), 1);
   cq_verify(cqv);
 
-  GPR_ASSERT(0 == strcmp(call_details.host, "localhost"));
-  GPR_ASSERT(0 == strcmp(call_details.method, "/foo/bar"));
+  GPR_ASSERT(0 == grpc_slice_str_cmp(call_details.host, "localhost"));
+  GPR_ASSERT(0 == grpc_slice_str_cmp(call_details.method, "/foo/bar"));
 
   grpc_metadata_array_destroy(&request_metadata_recv);
   grpc_call_details_destroy(&call_details);
@@ -130,7 +130,7 @@ static void failure_verifier(grpc_server *server, grpc_completion_queue *cq,
                              void *registered_method) {
   while (grpc_server_has_open_connections(server)) {
     GPR_ASSERT(grpc_completion_queue_next(
-                   cq, GRPC_TIMEOUT_MILLIS_TO_DEADLINE(20), NULL)
+                   cq, grpc_timeout_milliseconds_to_deadline(20), NULL)
                    .type == GRPC_QUEUE_TIMEOUT);
   }
 }

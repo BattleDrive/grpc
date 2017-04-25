@@ -42,6 +42,7 @@ using System.Threading.Tasks;
 using CommandLine;
 using CommandLine.Text;
 using Grpc.Core;
+using Grpc.Core.Logging;
 using Grpc.Core.Utils;
 using Grpc.Testing;
 using NUnit.Framework;
@@ -65,6 +66,7 @@ namespace Grpc.IntegrationTesting
 
         public static void Run(string[] args)
         {
+            GrpcEnvironment.SetLogger(new ConsoleLogger());
             var parserResult = Parser.Default.ParseArguments<ServerOptions>(args)
                 .WithNotParsed((x) => Environment.Exit(1))
                 .WithParsed(options =>
@@ -76,6 +78,11 @@ namespace Grpc.IntegrationTesting
 
         private async Task RunAsync()
         {
+            // (ThreadPoolSize == ProcessorCount) gives best throughput in benchmarks
+            // and doesn't seem to harm performance even when server and client
+            // are running on the same machine.
+            GrpcEnvironment.SetThreadPoolSize(Environment.ProcessorCount);
+
             string host = "0.0.0.0";
             int port = options.DriverPort;
 

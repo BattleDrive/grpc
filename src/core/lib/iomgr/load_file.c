@@ -44,10 +44,10 @@
 #include "src/core/lib/support/string.h"
 
 grpc_error *grpc_load_file(const char *filename, int add_null_terminator,
-                           gpr_slice *output) {
+                           grpc_slice *output) {
   unsigned char *contents = NULL;
   size_t contents_size = 0;
-  gpr_slice result = gpr_empty_slice();
+  grpc_slice result = grpc_empty_slice();
   FILE *file;
   size_t bytes_read = 0;
   grpc_error *error = GRPC_ERROR_NONE;
@@ -72,15 +72,18 @@ grpc_error *grpc_load_file(const char *filename, int add_null_terminator,
   if (add_null_terminator) {
     contents[contents_size++] = 0;
   }
-  result = gpr_slice_new(contents, contents_size, gpr_free);
+  result = grpc_slice_new(contents, contents_size, gpr_free);
 
 end:
   *output = result;
   if (file != NULL) fclose(file);
   if (error != GRPC_ERROR_NONE) {
-    grpc_error *error_out = grpc_error_set_str(
-        GRPC_ERROR_CREATE_REFERENCING("Failed to load file", &error, 1),
-        GRPC_ERROR_STR_FILENAME, filename);
+    grpc_error *error_out =
+        grpc_error_set_str(GRPC_ERROR_CREATE_REFERENCING_FROM_STATIC_STRING(
+                               "Failed to load file", &error, 1),
+                           GRPC_ERROR_STR_FILENAME,
+                           grpc_slice_from_copied_string(
+                               filename));  // TODO(ncteisen), always static?
     GRPC_ERROR_UNREF(error);
     error = error_out;
   }

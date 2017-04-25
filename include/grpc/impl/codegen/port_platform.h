@@ -90,7 +90,6 @@
 #endif
 #define GPR_PLATFORM_STRING "windows"
 #define GPR_WINDOWS 1
-#define GPR_WINSOCK_SOCKET 1
 #define GPR_WINDOWS_SUBPROCESS 1
 #define GPR_WINDOWS_ENV
 #ifdef __MSYS__
@@ -124,24 +123,14 @@
 #define GPR_GCC_TLS 1
 #define GPR_LINUX 1
 #define GPR_LINUX_LOG 1
-#define GPR_POSIX_SOCKET 1
-#define GPR_POSIX_WAKEUP_FD 1
-#define GPR_POSIX_SOCKETADDR 1
-#define GPR_POSIX_NO_SPECIAL_WAKEUP_FD 1
-#define GPR_POSIX_SOCKETUTILS 1
 #define GPR_SUPPORT_CHANNELS_FROM_FD 1
-#define GPR_HAVE_UNIX_SOCKET 1
-#define GPR_HAVE_IP_PKTINFO 1
-#define GPR_HAVE_IPV6_RECVPKTINFO 1
 #define GPR_LINUX_ENV 1
-#define GPR_POSIX_FILE 1
 #define GPR_POSIX_TMPFILE 1
 #define GPR_POSIX_STRING 1
 #define GPR_POSIX_SUBPROCESS 1
 #define GPR_POSIX_SYNC 1
 #define GPR_POSIX_TIME 1
 #define GPR_GETPID_IN_UNISTD_H 1
-#define GPR_HAVE_MSG_NOSIGNAL 1
 #ifdef _LP64
 #define GPR_ARCH_64 1
 #else /* _LP64 */
@@ -155,31 +144,19 @@
 #else /* _LP64 */
 #define GPR_ARCH_32 1
 #endif /* _LP64 */
-#define GPR_CPU_LINUX 1
+#define GPR_CPU_POSIX 1
 #define GPR_GCC_SYNC 1
 #define GPR_GCC_TLS 1
-#define GPR_POSIX_MULTIPOLL_WITH_POLL 1
-#define GPR_POSIX_WAKEUP_FD 1
-#define GPR_LINUX_EVENTFD 1
-#define GPR_POSIX_SOCKET 1
-#define GPR_POSIX_SOCKETADDR 1
-#define GPR_POSIX_SOCKETUTILS 1
 #define GPR_POSIX_ENV 1
-#define GPR_POSIX_FILE 1
 #define GPR_POSIX_TMPFILE 1
-#define GPR_POSIX_LOG
+#define GPR_ANDROID_LOG 1
 #define GPR_POSIX_STRING 1
 #define GPR_POSIX_SUBPROCESS 1
 #define GPR_POSIX_SYNC 1
 #define GPR_POSIX_TIME 1
 #define GPR_GETPID_IN_UNISTD_H 1
 #define GPR_SUPPORT_CHANNELS_FROM_FD 1
-#define GPR_HAVE_MSG_NOSIGNAL 1
-#define GPR_HAVE_UNIX_SOCKET 1
-#define GPR_HAVE_IP_PKTINFO 1
-#define GPR_HAVE_IPV6_RECVPKTINFO 1
 #elif defined(__linux__)
-#define GPR_POSIX_CRASH_HANDLER 1
 #define GPR_PLATFORM_STRING "linux"
 #ifndef _BSD_SOURCE
 #define _BSD_SOURCE
@@ -196,49 +173,30 @@
 #define GPR_GCC_TLS 1
 #define GPR_LINUX 1
 #define GPR_LINUX_LOG
-#define GPR_LINUX_MULTIPOLL_WITH_EPOLL 1
-#define GPR_POSIX_WAKEUP_FD 1
-#define GPR_POSIX_SOCKET 1
-#define GPR_POSIX_SOCKETADDR 1
 #define GPR_SUPPORT_CHANNELS_FROM_FD 1
-#define GPR_HAVE_UNIX_SOCKET 1
-#define GPR_HAVE_IP_PKTINFO 1
-#define GPR_HAVE_IPV6_RECVPKTINFO 1
-#ifdef __GLIBC_PREREQ
-#if __GLIBC_PREREQ(2, 9)
-#define GPR_LINUX_EVENTFD 1
-#define GPR_LINUX_EPOLL 1
-#endif
-#if __GLIBC_PREREQ(2, 10)
-#define GPR_LINUX_SOCKETUTILS 1
-#endif
-#endif
 #define GPR_LINUX_ENV 1
-#ifndef GPR_LINUX_EVENTFD
-#define GPR_POSIX_NO_SPECIAL_WAKEUP_FD 1
-#endif
-#ifndef GPR_LINUX_SOCKETUTILS
-#define GPR_POSIX_SOCKETUTILS
-#endif
-#define GPR_POSIX_FILE 1
 #define GPR_POSIX_TMPFILE 1
 #define GPR_POSIX_STRING 1
 #define GPR_POSIX_SUBPROCESS 1
 #define GPR_POSIX_SYNC 1
 #define GPR_POSIX_TIME 1
 #define GPR_GETPID_IN_UNISTD_H 1
-#define GPR_HAVE_MSG_NOSIGNAL 1
 #ifdef _LP64
 #define GPR_ARCH_64 1
 #else /* _LP64 */
 #define GPR_ARCH_32 1
 #endif /* _LP64 */
+#ifdef __GLIBC__
+#define GPR_POSIX_CRASH_HANDLER 1
+#else /* musl libc */
+#define GPR_MUSL_LIBC_COMPAT 1
+#endif
 #elif defined(__APPLE__)
+#include <Availability.h>
 #include <TargetConditionals.h>
 #ifndef _BSD_SOURCE
 #define _BSD_SOURCE
 #endif
-#define GPR_MSG_IOVLEN_TYPE int
 #if TARGET_OS_IPHONE
 //#define GPR_FORBID_UNREACHABLE_CODE 1
 #define GPR_PLATFORM_STRING "ios"
@@ -246,20 +204,24 @@
 #define GPR_PTHREAD_TLS 1
 #else /* TARGET_OS_IPHONE */
 #define GPR_PLATFORM_STRING "osx"
+#ifdef __MAC_OS_X_VERSION_MIN_REQUIRED
+#if __MAC_OS_X_VERSION_MIN_REQUIRED < __MAC_10_7
+#define GPR_CPU_IPHONE 1
+#define GPR_PTHREAD_TLS 1
+#else /* __MAC_OS_X_VERSION_MIN_REQUIRED < __MAC_10_7 */
 #define GPR_CPU_POSIX 1
 #define GPR_GCC_TLS 1
+#endif
+#else /* __MAC_OS_X_VERSION_MIN_REQUIRED */
+#define GPR_CPU_POSIX 1
+#define GPR_GCC_TLS 1
+#endif
 #define GPR_POSIX_CRASH_HANDLER 1
 #endif
+#define GPR_APPLE 1
 #define GPR_GCC_ATOMIC 1
 #define GPR_POSIX_LOG 1
-#define GPR_POSIX_MULTIPOLL_WITH_POLL 1
-#define GPR_POSIX_WAKEUP_FD 1
-#define GPR_POSIX_NO_SPECIAL_WAKEUP_FD 1
-#define GPR_POSIX_SOCKET 1
-#define GPR_POSIX_SOCKETADDR 1
-#define GPR_POSIX_SOCKETUTILS 1
 #define GPR_POSIX_ENV 1
-#define GPR_POSIX_FILE 1
 #define GPR_POSIX_TMPFILE 1
 #define GPR_POSIX_STRING 1
 #define GPR_POSIX_SUBPROCESS 1
@@ -267,9 +229,6 @@
 #define GPR_POSIX_TIME 1
 #define GPR_GETPID_IN_UNISTD_H 1
 #define GPR_SUPPORT_CHANNELS_FROM_FD 1
-#define GPR_HAVE_SO_NOSIGPIPE 1
-#define GPR_HAVE_UNIX_SOCKET 1
-#define GPR_HAVE_IP_PKTINFO 1
 #ifdef _LP64
 #define GPR_ARCH_64 1
 #else /* _LP64 */
@@ -280,18 +239,12 @@
 #ifndef _BSD_SOURCE
 #define _BSD_SOURCE
 #endif
+#define GPR_FREEBSD 1
 #define GPR_CPU_POSIX 1
 #define GPR_GCC_ATOMIC 1
 #define GPR_GCC_TLS 1
 #define GPR_POSIX_LOG 1
-#define GPR_POSIX_MULTIPOLL_WITH_POLL 1
-#define GPR_POSIX_WAKEUP_FD 1
-#define GPR_POSIX_NO_SPECIAL_WAKEUP_FD 1
-#define GPR_POSIX_SOCKET 1
-#define GPR_POSIX_SOCKETADDR 1
-#define GPR_POSIX_SOCKETUTILS 1
 #define GPR_POSIX_ENV 1
-#define GPR_POSIX_FILE 1
 #define GPR_POSIX_TMPFILE 1
 #define GPR_POSIX_STRING 1
 #define GPR_POSIX_SUBPROCESS 1
@@ -299,10 +252,6 @@
 #define GPR_POSIX_TIME 1
 #define GPR_GETPID_IN_UNISTD_H 1
 #define GPR_SUPPORT_CHANNELS_FROM_FD 1
-#define GPR_HAVE_SO_NOSIGPIPE 1
-#define GPR_HAVE_UNIX_SOCKET 1
-#define GPR_HAVE_IP_PKTINFO 1
-#define GPR_HAVE_IPV6_RECVPKTINFO 1
 #ifdef _LP64
 #define GPR_ARCH_64 1
 #else /* _LP64 */
@@ -319,18 +268,12 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+#define GPR_NACL 1
 #define GPR_CPU_POSIX 1
 #define GPR_GCC_ATOMIC 1
 #define GPR_GCC_TLS 1
 #define GPR_POSIX_LOG 1
-#define GPR_POSIX_MULTIPOLL_WITH_POLL 1
-#define GPR_POSIX_WAKEUP_FD 1
-#define GPR_POSIX_NO_SPECIAL_WAKEUP_FD 1
-#define GPR_POSIX_SOCKET 1
-#define GPR_POSIX_SOCKETADDR 1
-#define GPR_POSIX_SOCKETUTILS 1
 #define GPR_POSIX_ENV 1
-#define GPR_POSIX_FILE 1
 #define GPR_POSIX_TMPFILE 1
 #define GPR_POSIX_STRING 1
 #define GPR_POSIX_SUBPROCESS 1
@@ -358,6 +301,10 @@
 #endif
 
 #ifdef _MSC_VER
+#ifdef _PYTHON_MSVC
+// The Python 3.5 Windows runtime is missing InetNtop
+#define GPR_WIN_INET_NTOP
+#endif  // _PYTHON_MSVC
 #if _MSC_VER < 1700
 typedef __int8 int8_t;
 typedef __int16 int16_t;
@@ -411,16 +358,6 @@ typedef unsigned __int64 uint64_t;
 #error Must define exactly one of GPR_CPU_LINUX, GPR_CPU_POSIX, GPR_WINDOWS, GPR_CPU_IPHONE, GPR_CPU_CUSTOM
 #endif
 
-#if defined(GPR_POSIX_MULTIPOLL_WITH_POLL) && !defined(GPR_POSIX_SOCKET)
-#error Must define GPR_POSIX_SOCKET to use GPR_POSIX_MULTIPOLL_WITH_POLL
-#endif
-
-#if defined(GPR_POSIX_SOCKET) + defined(GPR_WINSOCK_SOCKET) + \
-        defined(GPR_CUSTOM_SOCKET) !=                         \
-    1
-#error Must define exactly one of GPR_POSIX_SOCKET, GPR_WINSOCK_SOCKET, GPR_CUSTOM_SOCKET
-#endif
-
 #if defined(GPR_MSVC_TLS) + defined(GPR_GCC_TLS) + defined(GPR_PTHREAD_TLS) + \
         defined(GPR_CUSTOM_TLS) !=                                            \
     1
@@ -431,22 +368,32 @@ typedef unsigned __int64 uint64_t;
    power of two */
 #define GPR_MAX_ALIGNMENT 16
 
-#ifndef GRPC_MUST_USE_RESULT
-#ifdef __GNUC__
-#define GRPC_MUST_USE_RESULT __attribute__((warn_unused_result))
+#ifndef GRPC_ARES
+#ifdef GPR_WINDOWS
+#define GRPC_ARES 0
 #else
-#define GRPC_MUST_USE_RESULT
+#define GRPC_ARES 1
 #endif
 #endif
 
-#ifndef GPRC_PRINT_FORMAT_CHECK
+#ifndef GRPC_MUST_USE_RESULT
+#if defined(__GNUC__) && !defined(__MINGW32__)
+#define GRPC_MUST_USE_RESULT __attribute__((warn_unused_result))
+#define GPR_ALIGN_STRUCT(n) __attribute__((aligned(n)))
+#else
+#define GRPC_MUST_USE_RESULT
+#define GPR_ALIGN_STRUCT(n)
+#endif
+#endif
+
+#ifndef GPR_PRINT_FORMAT_CHECK
 #ifdef __GNUC__
-#define GPRC_PRINT_FORMAT_CHECK(FORMAT_STR, ARGS) \
+#define GPR_PRINT_FORMAT_CHECK(FORMAT_STR, ARGS) \
   __attribute__((format(printf, FORMAT_STR, ARGS)))
 #else
-#define GPRC_PRINT_FORMAT_CHECK(FORMAT_STR, ARGS)
+#define GPR_PRINT_FORMAT_CHECK(FORMAT_STR, ARGS)
 #endif
-#endif /* GPRC_PRINT_FORMAT_CHECK */
+#endif /* GPR_PRINT_FORMAT_CHECK */
 
 #if GPR_FORBID_UNREACHABLE_CODE
 #define GPR_UNREACHABLE_CODE(STATEMENT)

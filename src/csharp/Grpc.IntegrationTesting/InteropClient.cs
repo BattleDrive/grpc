@@ -45,6 +45,7 @@ using Google.Apis.Auth.OAuth2;
 using Google.Protobuf;
 using Grpc.Auth;
 using Grpc.Core;
+using Grpc.Core.Logging;
 using Grpc.Core.Utils;
 using Grpc.Testing;
 using Newtonsoft.Json.Linq;
@@ -56,7 +57,7 @@ namespace Grpc.IntegrationTesting
     {
         private class ClientOptions
         {
-            [Option("server_host", Default = "127.0.0.1")]
+            [Option("server_host", Default = "localhost")]
             public string ServerHost { get; set; }
 
             [Option("server_host_override", Default = TestCredentials.DefaultHostOverride)]
@@ -95,6 +96,7 @@ namespace Grpc.IntegrationTesting
 
         public static void Run(string[] args)
         {
+            GrpcEnvironment.SetLogger(new ConsoleLogger());
             var parserResult = Parser.Default.ParseArguments<ClientOptions>(args)
                 .WithNotParsed(errors => Environment.Exit(1))
                 .WithParsed(options =>
@@ -195,8 +197,11 @@ namespace Grpc.IntegrationTesting
                 case "status_code_and_message":
                     await RunStatusCodeAndMessageAsync(client);
                     break;
+                case "unimplemented_service":
+                    RunUnimplementedService(new UnimplementedService.UnimplementedServiceClient(channel));
+                    break;
                 case "unimplemented_method":
-                    RunUnimplementedMethod(new UnimplementedService.UnimplementedServiceClient(channel));
+                    RunUnimplementedMethod(client);
                     break;
                 case "client_compressed_unary":
                     RunClientCompressedUnary(client);
@@ -520,12 +525,12 @@ namespace Grpc.IntegrationTesting
                 };
 
                 var call = client.FullDuplexCall(headers: CreateTestMetadata());
-                var responseHeaders = await call.ResponseHeadersAsync;
 
                 await call.RequestStream.WriteAsync(request);
                 await call.RequestStream.CompleteAsync();
                 await call.ResponseStream.ToListAsync();
 
+                var responseHeaders = await call.ResponseHeadersAsync;
                 var responseTrailers = call.GetTrailers();
 
                 Assert.AreEqual("test_initial_metadata_value", responseHeaders.First((entry) => entry.Key == "x-grpc-test-echo-initial").Value);
@@ -577,13 +582,21 @@ namespace Grpc.IntegrationTesting
             Console.WriteLine("Passed!");
         }
 
-        public static void RunUnimplementedMethod(UnimplementedService.UnimplementedServiceClient client)
+        public static void RunUnimplementedService(UnimplementedService.UnimplementedServiceClient client)
+        {
+            Console.WriteLine("running unimplemented_service");
+            var e = Assert.Throws<RpcException>(() => client.UnimplementedCall(new Empty()));
+
+            Assert.AreEqual(StatusCode.Unimplemented, e.Status.StatusCode);
+            Console.WriteLine("Passed!");
+        }
+
+        public static void RunUnimplementedMethod(TestService.TestServiceClient client)
         {
             Console.WriteLine("running unimplemented_method");
             var e = Assert.Throws<RpcException>(() => client.UnimplementedCall(new Empty()));
 
             Assert.AreEqual(StatusCode.Unimplemented, e.Status.StatusCode);
-            Assert.AreEqual("", e.Status.Detail);
             Console.WriteLine("Passed!");
         }
 

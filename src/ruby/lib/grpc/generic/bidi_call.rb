@@ -56,7 +56,8 @@ module GRPC
     # @param unmarshal [Function] f(string)->obj that unmarshals responses
     # @param metadata_received [true|false] indicates if metadata has already
     #     been received. Should always be true for server calls
-    def initialize(call, marshal, unmarshal, metadata_received: false)
+    def initialize(call, marshal, unmarshal, metadata_received: false,
+                   req_view: nil)
       fail(ArgumentError, 'not a call') unless call.is_a? Core::Call
       @call = call
       @marshal = marshal
@@ -67,6 +68,7 @@ module GRPC
       @writes_complete = false
       @complete = false
       @done_mutex = Mutex.new
+      @req_view = req_view
     end
 
     # Begins orchestration of the Bidi stream for a client sending requests.
@@ -95,7 +97,15 @@ module GRPC
     #
     # @param gen_each_reply [Proc] generates the BiDi stream replies.
     def run_on_server(gen_each_reply)
-      replys = gen_each_reply.call(read_loop(is_client: false))
+      # Pass in the optional call object parameter if possible
+      if gen_each_reply.arity == 1
+        replys = gen_each_reply.call(read_loop(is_client: false))
+      elsif gen_each_reply.arity == 2
+        replys = gen_each_reply.call(read_loop(is_client: false), @req_view)
+      else
+        fail 'Illegal arity of reply generator'
+      end
+
       write_loop(replys, is_client: false)
     end
 
@@ -141,6 +151,7 @@ module GRPC
         payload = @marshal.call(req)
         # Fails if status already received
         begin
+          @req_view.send_initial_metadata unless @req_view.nil?
           @call.run_batch(SEND_MESSAGE => payload)
         rescue GRPC::Core::CallError => e
           # This is almost definitely caused by a status arriving while still
@@ -189,6 +200,7 @@ module GRPC
             if is_client
               batch_result = @call.run_batch(RECV_STATUS_ON_CLIENT => nil)
               @call.status = batch_result.status
+              @call.trailing_metadata = @call.status.metadata if @call.status
               batch_result.check_status
               GRPC.logger.debug("bidi-read-loop: done status #{@call.status}")
             end
@@ -208,6 +220,10 @@ module GRPC
       GRPC.logger.debug('bidi-read-loop: finished')
       @reads_complete = true
       finished
+      # Make sure that the write loop is done done before finishing the call.
+      # Note that blocking is ok at this point because we've already received
+      # a status
+      @enq_th.join if is_client
     end
   end
 end

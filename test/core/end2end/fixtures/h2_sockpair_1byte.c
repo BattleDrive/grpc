@@ -40,7 +40,7 @@
 #include <grpc/support/sync.h>
 #include <grpc/support/thd.h>
 #include <grpc/support/useful.h>
-#include "src/core/ext/client_config/client_channel.h"
+#include "src/core/ext/filters/client_channel/client_channel.h"
 #include "src/core/ext/transport/chttp2/transport/chttp2_transport.h"
 #include "src/core/lib/channel/compress_filter.h"
 #include "src/core/lib/channel/connected_channel.h"
@@ -90,7 +90,17 @@ static grpc_end2end_test_fixture chttp2_create_fixture_socketpair(
   f.fixture_data = sfd;
   f.cq = grpc_completion_queue_create(NULL);
 
-  *sfd = grpc_iomgr_create_endpoint_pair("fixture", 1);
+  grpc_arg a[] = {{.key = GRPC_ARG_TCP_READ_CHUNK_SIZE,
+                   .type = GRPC_ARG_INTEGER,
+                   .value.integer = 1},
+                  {.key = GRPC_ARG_TCP_MIN_READ_CHUNK_SIZE,
+                   .type = GRPC_ARG_INTEGER,
+                   .value.integer = 1},
+                  {.key = GRPC_ARG_TCP_MAX_READ_CHUNK_SIZE,
+                   .type = GRPC_ARG_INTEGER,
+                   .value.integer = 1}};
+  grpc_channel_args args = {.num_args = GPR_ARRAY_SIZE(a), .args = a};
+  *sfd = grpc_iomgr_create_endpoint_pair("fixture", &args);
 
   return f;
 }
@@ -107,7 +117,7 @@ static void chttp2_init_client_socketpair(grpc_end2end_test_fixture *f,
       grpc_create_chttp2_transport(&exec_ctx, client_args, sfd->client, 1);
   client_setup_transport(&exec_ctx, &cs, transport);
   GPR_ASSERT(f->client);
-  grpc_chttp2_transport_start_reading(&exec_ctx, transport, NULL, 0);
+  grpc_chttp2_transport_start_reading(&exec_ctx, transport, NULL);
   grpc_exec_ctx_finish(&exec_ctx);
 }
 
@@ -123,7 +133,7 @@ static void chttp2_init_server_socketpair(grpc_end2end_test_fixture *f,
   transport =
       grpc_create_chttp2_transport(&exec_ctx, server_args, sfd->server, 0);
   server_setup_transport(f, transport);
-  grpc_chttp2_transport_start_reading(&exec_ctx, transport, NULL, 0);
+  grpc_chttp2_transport_start_reading(&exec_ctx, transport, NULL);
   grpc_exec_ctx_finish(&exec_ctx);
 }
 
@@ -133,13 +143,16 @@ static void chttp2_tear_down_socketpair(grpc_end2end_test_fixture *f) {
 
 /* All test configurations */
 static grpc_end2end_test_config configs[] = {
-    {"chttp2/socketpair_one_byte_at_a_time", 0,
-     chttp2_create_fixture_socketpair, chttp2_init_client_socketpair,
-     chttp2_init_server_socketpair, chttp2_tear_down_socketpair},
+    {"chttp2/socketpair_one_byte_at_a_time",
+     FEATURE_MASK_SUPPORTS_AUTHORITY_HEADER, chttp2_create_fixture_socketpair,
+     chttp2_init_client_socketpair, chttp2_init_server_socketpair,
+     chttp2_tear_down_socketpair},
 };
 
 int main(int argc, char **argv) {
   size_t i;
+
+  g_fixture_slowdown_factor = 2;
 
   grpc_test_init(argc, argv);
   grpc_end2end_tests_pre_init();

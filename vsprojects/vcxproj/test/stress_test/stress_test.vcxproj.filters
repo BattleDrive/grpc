@@ -36,6 +36,9 @@
     <ClInclude Include="$(SolutionDir)\..\test\cpp\interop\stress_interop_client.h">
       <Filter>test\cpp\interop</Filter>
     </ClInclude>
+    <ClInclude Include="$(SolutionDir)\..\test\cpp\util\create_test_channel.h">
+      <Filter>test\cpp\util</Filter>
+    </ClInclude>
     <ClInclude Include="$(SolutionDir)\..\test\cpp\util\metrics_server.h">
       <Filter>test\cpp\util</Filter>
     </ClInclude>

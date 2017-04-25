@@ -34,8 +34,15 @@
 
 namespace Grpc;
 
+/**
+ * Class AbstractCall.
+ * @package Grpc
+ */
 abstract class AbstractCall
 {
+    /**
+     * @var Call
+     */
     protected $call;
     protected $deserialize;
     protected $metadata;
@@ -54,10 +61,11 @@ abstract class AbstractCall
     public function __construct(Channel $channel,
                                 $method,
                                 $deserialize,
-                                $options = [])
+                                array $options = [])
     {
-        if (isset($options['timeout']) &&
-            is_numeric($timeout = $options['timeout'])) {
+        if (array_key_exists('timeout', $options) &&
+            is_numeric($timeout = $options['timeout'])
+        ) {
             $now = Timeval::now();
             $delta = new Timeval($timeout);
             $deadline = $now->add($delta);
@@ -68,17 +76,19 @@ abstract class AbstractCall
         $this->deserialize = $deserialize;
         $this->metadata = null;
         $this->trailing_metadata = null;
-        if (isset($options['call_credentials_callback']) &&
+        if (array_key_exists('call_credentials_callback', $options) &&
             is_callable($call_credentials_callback =
-                        $options['call_credentials_callback'])) {
+                $options['call_credentials_callback'])
+        ) {
             $call_credentials = CallCredentials::createFromPlugin(
-                $call_credentials_callback);
+                $call_credentials_callback
+            );
             $this->call->setCredentials($call_credentials);
         }
     }
 
     /**
-     * @return The metadata sent by the server.
+     * @return mixed The metadata sent by the server
      */
     public function getMetadata()
     {
@@ -86,7 +96,7 @@ abstract class AbstractCall
     }
 
     /**
-     * @return The trailing metadata sent by the server.
+     * @return mixed The trailing metadata sent by the server
      */
     public function getTrailingMetadata()
     {
@@ -94,7 +104,7 @@ abstract class AbstractCall
     }
 
     /**
-     * @return string The URI of the endpoint.
+     * @return string The URI of the endpoint
      */
     public function getPeer()
     {
@@ -110,26 +120,59 @@ abstract class AbstractCall
     }
 
     /**
+     * Serialize a message to the protobuf binary format.
+     *
+     * @param mixed $data The Protobuf message
+     *
+     * @return string The protobuf binary format
+     */
+    protected function _serializeMessage($data)
+    {
+        // Proto3 implementation
+        if (method_exists($data, 'encode')) {
+            return $data->encode();
+        } elseif (method_exists($data, 'serializeToString')) {
+            return $data->serializeToString();
+        }
+
+        // Protobuf-PHP implementation
+        return $data->serialize();
+    }
+
+    /**
      * Deserialize a response value to an object.
      *
      * @param string $value The binary value to deserialize
      *
-     * @return The deserialized value
+     * @return mixed The deserialized value
      */
-    protected function deserializeResponse($value)
+    protected function _deserializeResponse($value)
     {
         if ($value === null) {
             return;
         }
 
+        // Proto3 implementation
+        if (is_array($this->deserialize)) {
+            list($className, $deserializeFunc) = $this->deserialize;
+            $obj = new $className();
+            if (method_exists($obj, $deserializeFunc)) {
+                $obj->$deserializeFunc($value);
+            } else {
+                $obj->mergeFromString($value);
+            }
+
+            return $obj;
+        }
+
+        // Protobuf-PHP implementation
         return call_user_func($this->deserialize, $value);
     }
 
     /**
      * Set the CallCredentials for the underlying Call.
      *
-     * @param CallCredentials $call_credentials The CallCredentials
-     *                                          object
+     * @param CallCredentials $call_credentials The CallCredentials object
      */
     public function setCallCredentials($call_credentials)
     {

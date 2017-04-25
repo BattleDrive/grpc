@@ -101,7 +101,7 @@ namespace Grpc.Core.Tests
         private string ReadTestsJson()
         {
             var assemblyDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-            var testsJsonFile = Path.Combine(assemblyDir, "..", "..", "..", "tests.json");
+            var testsJsonFile = Path.Combine(assemblyDir, "..", "..", "..", "..", "tests.json");
             return File.ReadAllText(testsJsonFile);
         }
 
@@ -115,7 +115,8 @@ namespace Grpc.Core.Tests
             var otherAssemblies = new[] {
                 "Grpc.Examples.Tests",
                 "Grpc.HealthCheck.Tests",
-                "Grpc.IntegrationTesting"
+                "Grpc.IntegrationTesting",
+                "Grpc.Reflection.Tests",
             };
             foreach (var assemblyName in otherAssemblies)
             {

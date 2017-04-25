@@ -49,6 +49,9 @@
 #include "rb_loader.h"
 #include "rb_server.h"
 #include "rb_server_credentials.h"
+#include "rb_compression_options.h"
+#include "rb_event_thread.h"
+#include "rb_channel.h"
 
 static VALUE grpc_rb_cTimeVal = Qnil;
 
@@ -220,7 +223,7 @@ static VALUE grpc_rb_time_val_to_time(VALUE self) {
                        time_const);
   real_time = gpr_convert_clock_type(*time_const, GPR_CLOCK_REALTIME);
   return rb_funcall(rb_cTime, id_at, 2, INT2NUM(real_time.tv_sec),
-                    INT2NUM(real_time.tv_nsec));
+                    INT2NUM(real_time.tv_nsec / 1000));
 }
 
 /* Invokes inspect on the ctime version of the time val. */
@@ -290,17 +293,14 @@ VALUE sym_metadata = Qundef;
 
 static gpr_once g_once_init = GPR_ONCE_INIT;
 
-static void grpc_ruby_once_init() {
+static void grpc_ruby_once_init_internal() {
   grpc_init();
+  grpc_rb_event_queue_thread_start();
+  grpc_rb_channel_polling_thread_start();
   atexit(grpc_rb_shutdown);
 }
 
-void Init_grpc_c() {
-  if (!grpc_rb_load_core()) {
-    rb_raise(rb_eLoadError, "Couldn't find or load gRPC's dynamic C core");
-    return;
-  }
-
+void grpc_ruby_once_init() {
   /* ruby_vm_at_exit doesn't seem to be working. It would crash once every
    * blue moon, and some users are getting it repeatedly. See the discussions
    *  - https://github.com/grpc/grpc/pull/5337
@@ -311,7 +311,14 @@ void Init_grpc_c() {
    * then loaded again by another VM within the same process, we need to
    * schedule our initialization and destruction only once.
    */
-  gpr_once_init(&g_once_init, grpc_ruby_once_init);
+  gpr_once_init(&g_once_init, grpc_ruby_once_init_internal);
+}
+
+void Init_grpc_c() {
+  if (!grpc_rb_load_core()) {
+    rb_raise(rb_eLoadError, "Couldn't find or load gRPC's dynamic C core");
+    return;
+  }
 
   grpc_rb_mGRPC = rb_define_module("GRPC");
   grpc_rb_mGrpcCore = rb_define_module_under(grpc_rb_mGRPC, "Core");
@@ -332,4 +339,5 @@ void Init_grpc_c() {
   Init_grpc_server_credentials();
   Init_grpc_status_codes();
   Init_grpc_time_consts();
+  Init_grpc_compression_options();
 }

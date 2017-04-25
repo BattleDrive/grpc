@@ -44,12 +44,14 @@ namespace Grpc.Core.Internal
 
     internal delegate void BatchCompletionDelegate(bool success, BatchContextSafeHandle ctx);
 
+    internal delegate void RequestCallCompletionDelegate(bool success, RequestCallContextSafeHandle ctx);
+
     internal class CompletionRegistry
     {
         static readonly ILogger Logger = GrpcEnvironment.Logger.ForType<CompletionRegistry>();
 
         readonly GrpcEnvironment environment;
-        readonly ConcurrentDictionary<IntPtr, OpCompletionDelegate> dict = new ConcurrentDictionary<IntPtr, OpCompletionDelegate>();
+        readonly ConcurrentDictionary<IntPtr, OpCompletionDelegate> dict = new ConcurrentDictionary<IntPtr, OpCompletionDelegate>(new IntPtrComparer());
 
         public CompletionRegistry(GrpcEnvironment environment)
         {
@@ -65,6 +67,12 @@ namespace Grpc.Core.Internal
         public void RegisterBatchCompletion(BatchContextSafeHandle ctx, BatchCompletionDelegate callback)
         {
             OpCompletionDelegate opCallback = ((success) => HandleBatchCompletion(success, ctx, callback));
+            Register(ctx.Handle, opCallback);
+        }
+
+        public void RegisterRequestCallCompletion(RequestCallContextSafeHandle ctx, RequestCallCompletionDelegate callback)
+        {
+            OpCompletionDelegate opCallback = ((success) => HandleRequestCallCompletion(success, ctx, callback));
             Register(ctx.Handle, opCallback);
         }
 
@@ -84,7 +92,7 @@ namespace Grpc.Core.Internal
             }
             catch (Exception e)
             {
-                Logger.Error(e, "Exception occured while invoking completion delegate.");
+                Logger.Error(e, "Exception occured while invoking batch completion delegate.");
             }
             finally
             {
@@ -92,6 +100,41 @@ namespace Grpc.Core.Internal
                 {
                     ctx.Dispose();
                 }
+            }
+        }
+
+        private static void HandleRequestCallCompletion(bool success, RequestCallContextSafeHandle ctx, RequestCallCompletionDelegate callback)
+        {
+            try
+            {
+                callback(success, ctx);
+            }
+            catch (Exception e)
+            {
+                Logger.Error(e, "Exception occured while invoking request call completion delegate.");
+            }
+            finally
+            {
+                if (ctx != null)
+                {
+                    ctx.Dispose();
+                }
+            }
+        }
+
+        /// <summary>
+        /// IntPtr doesn't implement <c>IEquatable{IntPtr}</c> so we need to use custom comparer to avoid boxing.
+        /// </summary>
+        private class IntPtrComparer : IEqualityComparer<IntPtr>
+        {
+            public bool Equals(IntPtr x, IntPtr y)
+            {
+                return x == y;
+            }
+
+            public int GetHashCode(IntPtr obj)
+            {
+                return obj.GetHashCode();
             }
         }
     }

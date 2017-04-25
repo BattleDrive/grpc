@@ -49,9 +49,10 @@ def mako_plugin(dictionary):
           tests.append({
               'name': new_target['name'],
               'args': [fn],
+              'exclude_iomgrs': ['uv'],
               'exclude_configs': ['tsan'],
               'uses_polling': False,
-              'platforms': ['linux'],
+              'platforms': ['mac', 'linux'],
               'ci_platforms': ['linux'],
               'flaky': False,
               'language': 'c',

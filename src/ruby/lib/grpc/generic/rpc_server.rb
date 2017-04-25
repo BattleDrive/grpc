@@ -353,8 +353,11 @@ module GRPC
       return an_rpc if @pool.ready_for_work?
       GRPC.logger.warn('no free worker threads currently')
       noop = proc { |x| x }
+
+      # Create a new active call that knows that metadata hasn't been
+      # sent yet
       c = ActiveCall.new(an_rpc.call, noop, noop, an_rpc.deadline,
-                         metadata_received: true)
+                         metadata_received: true, started: false)
       c.send_status(GRPC::Core::StatusCodes::RESOURCE_EXHAUSTED, '')
       nil
     end
@@ -365,8 +368,11 @@ module GRPC
       return an_rpc if rpc_descs.key?(mth)
       GRPC.logger.warn("UNIMPLEMENTED: #{an_rpc}")
       noop = proc { |x| x }
+
+      # Create a new active call that knows that
+      # metadata hasn't been sent yet
       c = ActiveCall.new(an_rpc.call, noop, noop, an_rpc.deadline,
-                         metadata_received: true)
+                         metadata_received: true, started: false)
       c.send_status(GRPC::Core::StatusCodes::UNIMPLEMENTED, '')
       nil
     end
@@ -413,17 +419,20 @@ module GRPC
       unless @connect_md_proc.nil?
         connect_md = @connect_md_proc.call(an_rpc.method, an_rpc.metadata)
       end
-      an_rpc.call.run_batch(SEND_INITIAL_METADATA => connect_md)
 
       return nil unless available?(an_rpc)
       return nil unless implemented?(an_rpc)
 
-      # Create the ActiveCall
+      # Create the ActiveCall. Indicate that metadata hasnt been sent yet.
       GRPC.logger.info("deadline is #{an_rpc.deadline}; (now=#{Time.now})")
       rpc_desc = rpc_descs[an_rpc.method.to_sym]
-      c = ActiveCall.new(an_rpc.call, rpc_desc.marshal_proc,
-                         rpc_desc.unmarshal_proc(:input), an_rpc.deadline,
-                         metadata_received: true)
+      c = ActiveCall.new(an_rpc.call,
+                         rpc_desc.marshal_proc,
+                         rpc_desc.unmarshal_proc(:input),
+                         an_rpc.deadline,
+                         metadata_received: true,
+                         started: false,
+                         metadata_to_send: connect_md)
       mth = an_rpc.method.to_sym
       [c, mth]
     end

@@ -36,10 +36,10 @@
 
 #include <grpc/grpc.h>
 #include <grpc/grpc_security.h>
+#include <grpc/slice.h>
 #include <grpc/support/alloc.h>
 #include <grpc/support/cmdline.h>
 #include <grpc/support/log.h>
-#include <grpc/support/slice.h>
 #include <grpc/support/sync.h>
 
 #include "src/core/lib/security/credentials/jwt/jwt_verifier.h"
@@ -59,7 +59,7 @@ static void print_usage_and_exit(gpr_cmdline *cl, const char *argv0) {
   exit(1);
 }
 
-static void on_jwt_verification_done(void *user_data,
+static void on_jwt_verification_done(grpc_exec_ctx *exec_ctx, void *user_data,
                                      grpc_jwt_verifier_status status,
                                      grpc_jwt_claims *claims) {
   synchronizer *sync = user_data;
@@ -72,7 +72,7 @@ static void on_jwt_verification_done(void *user_data,
         grpc_json_dump_to_string((grpc_json *)grpc_jwt_claims_json(claims), 2);
     printf("Claims: \n\n%s\n", claims_str);
     gpr_free(claims_str);
-    grpc_jwt_claims_destroy(claims);
+    grpc_jwt_claims_destroy(exec_ctx, claims);
   } else {
     GPR_ASSERT(claims == NULL);
     fprintf(stderr, "Verification failed with error %s\n",
@@ -93,6 +93,7 @@ int main(int argc, char **argv) {
   char *aud = NULL;
   grpc_exec_ctx exec_ctx = GRPC_EXEC_CTX_INIT;
 
+  grpc_init();
   cl = gpr_cmdline_create("JWT verifier tool");
   gpr_cmdline_add_string(cl, "jwt", "JSON web token to verify", &jwt);
   gpr_cmdline_add_string(cl, "aud", "Audience for the JWT", &aud);
@@ -105,7 +106,7 @@ int main(int argc, char **argv) {
 
   grpc_init();
 
-  sync.pollset = gpr_malloc(grpc_pollset_size());
+  sync.pollset = gpr_zalloc(grpc_pollset_size());
   grpc_pollset_init(sync.pollset, &sync.mu);
   sync.is_done = 0;
 
@@ -122,14 +123,16 @@ int main(int argc, char **argv) {
                               gpr_inf_future(GPR_CLOCK_MONOTONIC))))
       sync.is_done = true;
     gpr_mu_unlock(sync.mu);
-    grpc_exec_ctx_finish(&exec_ctx);
+    grpc_exec_ctx_flush(&exec_ctx);
     gpr_mu_lock(sync.mu);
   }
   gpr_mu_unlock(sync.mu);
 
   gpr_free(sync.pollset);
 
-  grpc_jwt_verifier_destroy(verifier);
+  grpc_jwt_verifier_destroy(&exec_ctx, verifier);
+  grpc_exec_ctx_finish(&exec_ctx);
   gpr_cmdline_destroy(cl);
+  grpc_shutdown();
   return !sync.success;
 }

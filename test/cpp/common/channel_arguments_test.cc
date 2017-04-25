@@ -33,11 +33,61 @@
 
 #include <grpc++/support/channel_arguments.h>
 
+#include <grpc++/grpc++.h>
 #include <grpc/grpc.h>
+#include <grpc/support/useful.h>
 #include <gtest/gtest.h>
+
+extern "C" {
+#include "src/core/lib/iomgr/exec_ctx.h"
+#include "src/core/lib/iomgr/socket_mutator.h"
+}
 
 namespace grpc {
 namespace testing {
+
+namespace {
+
+// A simple grpc_socket_mutator to be used to test SetSocketMutator
+class TestSocketMutator : public grpc_socket_mutator {
+ public:
+  TestSocketMutator();
+
+  bool MutateFd(int fd) {
+    // Do nothing on the fd
+    return true;
+  }
+};
+
+//
+// C API for TestSocketMutator
+//
+
+bool test_mutator_mutate_fd(int fd, grpc_socket_mutator* mutator) {
+  TestSocketMutator* tsm = (TestSocketMutator*)mutator;
+  return tsm->MutateFd(fd);
+}
+
+int test_mutator_compare(grpc_socket_mutator* a, grpc_socket_mutator* b) {
+  return GPR_ICMP(a, b);
+}
+
+void test_mutator_destroy(grpc_socket_mutator* mutator) {
+  TestSocketMutator* tsm = (TestSocketMutator*)mutator;
+  delete tsm;
+}
+
+grpc_socket_mutator_vtable test_mutator_vtable = {
+    test_mutator_mutate_fd, test_mutator_compare, test_mutator_destroy};
+
+//
+// TestSocketMutator implementation
+//
+
+TestSocketMutator::TestSocketMutator() {
+  grpc_socket_mutator_init(this, &test_mutator_vtable);
+}
+}
 
 class ChannelArgumentsTest : public ::testing::Test {
  protected:
@@ -53,7 +103,7 @@ class ChannelArgumentsTest : public ::testing::Test {
 
   grpc::string GetDefaultUserAgentPrefix() {
     std::ostringstream user_agent_prefix;
-    user_agent_prefix << "grpc-c++/" << grpc_version_string();
+    user_agent_prefix << "grpc-c++/" << Version();
     return user_agent_prefix.str();
   }
 
@@ -165,6 +215,23 @@ TEST_F(ChannelArgumentsTest, SetPointer) {
   EXPECT_TRUE(HasArg(arg0));
 }
 
+TEST_F(ChannelArgumentsTest, SetSocketMutator) {
+  VerifyDefaultChannelArgs();
+  grpc_arg arg0, arg1;
+  TestSocketMutator* mutator0 = new TestSocketMutator();
+  TestSocketMutator* mutator1 = new TestSocketMutator();
+  arg0 = grpc_socket_mutator_to_arg(mutator0);
+  arg1 = grpc_socket_mutator_to_arg(mutator1);
+
+  channel_args_.SetSocketMutator(mutator0);
+  EXPECT_TRUE(HasArg(arg0));
+
+  channel_args_.SetSocketMutator(mutator1);
+  EXPECT_TRUE(HasArg(arg1));
+  // arg0 is replaced by arg1
+  EXPECT_FALSE(HasArg(arg0));
+}
+
 TEST_F(ChannelArgumentsTest, SetUserAgentPrefix) {
   VerifyDefaultChannelArgs();
   grpc::string prefix("prefix");
@@ -176,6 +243,22 @@ TEST_F(ChannelArgumentsTest, SetUserAgentPrefix) {
 
   channel_args_.SetUserAgentPrefix(prefix);
   EXPECT_TRUE(HasArg(arg0));
+
+  // Test if the user agent string is copied correctly
+  ChannelArguments new_channel_args(channel_args_);
+  grpc_channel_args args;
+  SetChannelArgs(new_channel_args, &args);
+  bool found = false;
+  for (size_t i = 0; i < args.num_args; i++) {
+    const grpc_arg& arg = args.args[i];
+    if (arg.type == GRPC_ARG_STRING &&
+        grpc::string(arg.key) == GRPC_ARG_PRIMARY_USER_AGENT_STRING) {
+      EXPECT_FALSE(found);
+      EXPECT_EQ(0, strcmp(arg.value.string, arg0.value.string));
+      found = true;
+    }
+  }
+  EXPECT_TRUE(found);
 }
 
 }  // namespace testing

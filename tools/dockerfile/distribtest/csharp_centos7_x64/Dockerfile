@@ -33,8 +33,11 @@ RUN rpm --import "http://keyserver.ubuntu.com/pks/lookup?op=get&search=0x3FA7E03
 RUN yum-config-manager --add-repo http://download.mono-project.com/repo/centos/
 
 RUN yum install -y mono
-RUN yum install -y nuget
+
 RUN yum install -y unzip
+
+# --nogpgcheck because nuget-2.12 package is not signed.
+RUN yum install -y nuget --nogpgcheck
 
 # Help mono correctly locate libMonoPosixHelper.so
 # as a workaround for issue https://bugzilla.xamarin.com/show_bug.cgi?id=42820

@@ -38,6 +38,7 @@
 #import <Cronet/Cronet.h>
 #import <GRPCClient/GRPCCall+ChannelArg.h>
 #import <GRPCClient/GRPCCall+Tests.h>
+#import <GRPCClient/internal_testing/GRPCCall+InternalTests.h>
 #import <GRPCClient/GRPCCall+Cronet.h>
 #import <ProtoRPC/ProtoRPC.h>
 #import <RemoteTest/Messages.pbobjc.h>
@@ -45,6 +46,10 @@
 #import <RemoteTest/Test.pbrpc.h>
 #import <RxLibrary/GRXBufferedPipe.h>
 #import <RxLibrary/GRXWriter+Immediate.h>
+#import <grpc/support/log.h>
+#import <grpc/grpc.h>
+
+#define TEST_TIMEOUT 32
 
 // Convenience constructors for the generated proto messages:
 
@@ -88,8 +93,20 @@
   return nil;
 }
 
+// This number indicates how many bytes of overhead does Protocol Buffers encoding add onto the
+// message. The number varies as different message.proto is used on different servers. The actual
+// number for each interop server is overridden in corresponding derived test classes.
 - (int32_t)encodingOverhead {
   return 0;
+}
+
++ (void)setUp {
+#ifdef GRPC_COMPILE_WITH_CRONET
+  // Cronet setup
+  [Cronet setHttp2Enabled:YES];
+  [Cronet start];
+  [GRPCCall useCronetWithEngine:[Cronet getGlobalEngine]];
+#endif
 }
 
 - (void)setUp {
@@ -98,14 +115,6 @@
   [GRPCCall resetHostSettings];
 
   _service = self.class.host ? [RMTTestService serviceWithHost:self.class.host] : nil;
-#ifdef GRPC_COMPILE_WITH_CRONET
-  if (cronetEngine == NULL) {
-    // Cronet setup
-    [Cronet setHttp2Enabled:YES];
-    [Cronet start];
-    [GRPCCall useCronetWithEngine:[Cronet getGlobalEngine]];
-  }
-#endif
 }
 
 - (void)testEmptyUnaryRPC {
@@ -123,7 +132,7 @@
     [expectation fulfill];
   }];
 
-  [self waitForExpectationsWithTimeout:4 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
 - (void)testLargeUnaryRPC {
@@ -146,7 +155,45 @@
     [expectation fulfill];
   }];
 
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
+}
+
+- (void)testPacketCoalescing {
+  XCTAssertNotNil(self.class.host);
+  __weak XCTestExpectation *expectation = [self expectationWithDescription:@"LargeUnary"];
+
+  RMTSimpleRequest *request = [RMTSimpleRequest message];
+  request.responseType = RMTPayloadType_Compressable;
+  request.responseSize = 10;
+  request.payload.body = [NSMutableData dataWithLength:10];
+
+  [GRPCCall enableOpBatchLog:YES];
+  [_service unaryCallWithRequest:request handler:^(RMTSimpleResponse *response, NSError *error) {
+    XCTAssertNil(error, @"Finished with unexpected error: %@", error);
+
+    RMTSimpleResponse *expectedResponse = [RMTSimpleResponse message];
+    expectedResponse.payload.type = RMTPayloadType_Compressable;
+    expectedResponse.payload.body = [NSMutableData dataWithLength:10];
+    XCTAssertEqualObjects(response, expectedResponse);
+
+    // The test is a success if there is a batch of exactly 3 ops (SEND_INITIAL_METADATA,
+    // SEND_MESSAGE, SEND_CLOSE_FROM_CLIENT). Without packet coalescing each batch of ops contains
+    // only one op.
+    NSArray *opBatches = [GRPCCall obtainAndCleanOpBatchLog];
+    const NSInteger kExpectedOpBatchSize = 3;
+    for (NSObject *o in opBatches) {
+      if ([o isKindOfClass:[NSArray class]]) {
+        NSArray *batch = (NSArray *)o;
+        if ([batch count] == kExpectedOpBatchSize) {
+          [expectation fulfill];
+          break;
+        }
+      }
+    }
+  }];
+
   [self waitForExpectationsWithTimeout:16 handler:nil];
+  [GRPCCall enableOpBatchLog:NO];
 }
 
 - (void)test4MBResponsesAreAccepted {
@@ -163,7 +210,7 @@
     [expectation fulfill];
   }];
 
-  [self waitForExpectationsWithTimeout:16 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
 - (void)testResponsesOverMaxSizeFailWithActionableMessage {
@@ -180,11 +227,11 @@
     // - If you're developing the server, consider using response streaming, or let clients filter
     //   responses by setting a google.protobuf.FieldMask in the request:
     //   https://github.com/google/protobuf/blob/master/src/google/protobuf/field_mask.proto
-    XCTAssertEqualObjects(error.localizedDescription, @"Max message size exceeded");
+    XCTAssertEqualObjects(error.localizedDescription, @"Received message larger than max (4194305 vs. 4194304)");
     [expectation fulfill];
   }];
 
-  [self waitForExpectationsWithTimeout:16 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
 - (void)testResponsesOver4MBAreAcceptedIfOptedIn {
@@ -204,7 +251,7 @@
     [expectation fulfill];
   }];
 
-  [self waitForExpectationsWithTimeout:16 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
 - (void)testClientStreamingRPC {
@@ -237,7 +284,7 @@
     [expectation fulfill];
   }];
 
-  [self waitForExpectationsWithTimeout:8 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
 - (void)testServerStreamingRPC {
@@ -274,7 +321,7 @@
     }
   }];
 
-  [self waitForExpectationsWithTimeout:8 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
 - (void)testPingPongRPC {
@@ -318,11 +365,9 @@
       [expectation fulfill];
     }
   }];
-  [self waitForExpectationsWithTimeout:4 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
-#ifndef GRPC_COMPILE_WITH_CRONET
-// TODO(makdharma@): Fix this test
 - (void)testEmptyStreamRPC {
   XCTAssertNotNil(self.class.host);
   __weak XCTestExpectation *expectation = [self expectationWithDescription:@"EmptyStream"];
@@ -334,9 +379,8 @@
     XCTAssert(done, @"Unexpected response: %@", response);
     [expectation fulfill];
   }];
-  [self waitForExpectationsWithTimeout:2 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
-#endif
 
 - (void)testCancelAfterBeginRPC {
   XCTAssertNotNil(self.class.host);
@@ -360,7 +404,7 @@
   [call cancel];
   XCTAssertEqual(call.state, GRXWriterStateFinished);
 
-  [self waitForExpectationsWithTimeout:1 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
 - (void)testCancelAfterFirstResponseRPC {
@@ -395,7 +439,7 @@
     }
   }];
   [call start];
-  [self waitForExpectationsWithTimeout:8 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
 - (void)testRPCAfterClosingOpenConnections {
@@ -419,7 +463,7 @@
     }];
   }];
 
-  [self waitForExpectationsWithTimeout:4 handler:nil];
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }
 
 @end

@@ -1,6 +1,6 @@
 /*
  *
- * Copyright 2016, Google Inc.
+ * Copyright 2017, Google Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,6 +32,7 @@
  */
 
 #include <grpc++/completion_queue.h>
+#include <grpc/support/time.h>
 #include <gtest/gtest.h>
 
 namespace grpc {

@@ -1,4 +1,4 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python
 # Copyright 2015, Google Inc.
 # All rights reserved.
 #
@@ -28,13 +28,15 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+from __future__ import print_function
+
 import json
 import os
 import re
 import sys
 
 root = os.path.abspath(os.path.join(os.path.dirname(sys.argv[0]), '../../..'))
-with open(os.path.join(root, 'tools', 'run_tests', 'sources_and_headers.json')) as f:
+with open(os.path.join(root, 'tools', 'run_tests', 'generated', 'sources_and_headers.json')) as f:
   js = json.loads(f.read())
 
 re_inc1 = re.compile(r'^#\s*include\s*"([^"]*)"')
@@ -55,7 +57,8 @@ def target_has_header(target, name):
   for dep in target['deps']:
     if target_has_header(get_target(dep), name):
       return True
-  if name == 'src/core/lib/profiling/stap_probes.h':
+  if name in ['src/core/lib/profiling/stap_probes.h',
+              'src/proto/grpc/reflection/v1alpha/reflection.grpc.pb.h']:
     return True
   return False
 
@@ -74,14 +77,14 @@ for target in js:
       for line in src:
         m = re_inc1.match(line)
         if m:
-          if not target_has_header(target, m.group(1)) and not target['is_filegroup']:
+          if not target_has_header(target, m.group(1)):
             print (
               'target %s (%s) does not name header %s as a dependency' % (
                 target['name'], fn, m.group(1)))
             errors += 1
         m = re_inc2.match(line)
         if m:
-          if not target_has_header(target, 'include/' + m.group(1)) and not target['is_filegroup']:
+          if not target_has_header(target, 'include/' + m.group(1)):
             print (
               'target %s (%s) does not name header %s as a dependency' % (
                 target['name'], fn, m.group(1)))

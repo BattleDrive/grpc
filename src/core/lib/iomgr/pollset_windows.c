@@ -31,9 +31,9 @@
  *
  */
 
-#include <grpc/support/port_platform.h>
+#include "src/core/lib/iomgr/port.h"
 
-#ifdef GPR_WINSOCK_SOCKET
+#ifdef GRPC_WINSOCK_SOCKET
 
 #include <grpc/support/log.h>
 #include <grpc/support/thd.h>
@@ -98,7 +98,6 @@ size_t grpc_pollset_size(void) { return sizeof(grpc_pollset); }
 
 void grpc_pollset_init(grpc_pollset *pollset, gpr_mu **mu) {
   *mu = &grpc_polling_mu;
-  memset(pollset, 0, sizeof(*pollset));
   pollset->root_worker.links[GRPC_POLLSET_WORKER_LINK_POLLSET].next =
       pollset->root_worker.links[GRPC_POLLSET_WORKER_LINK_POLLSET].prev =
           &pollset->root_worker;
@@ -109,7 +108,7 @@ void grpc_pollset_shutdown(grpc_exec_ctx *exec_ctx, grpc_pollset *pollset,
   pollset->shutting_down = 1;
   grpc_pollset_kick(pollset, GRPC_POLLSET_KICK_BROADCAST);
   if (!pollset->is_iocp_worker) {
-    grpc_exec_ctx_sched(exec_ctx, closure, GRPC_ERROR_NONE, NULL);
+    grpc_closure_sched(exec_ctx, closure, GRPC_ERROR_NONE);
   } else {
     pollset->on_shutdown = closure;
   }
@@ -117,21 +116,11 @@ void grpc_pollset_shutdown(grpc_exec_ctx *exec_ctx, grpc_pollset *pollset,
 
 void grpc_pollset_destroy(grpc_pollset *pollset) {}
 
-void grpc_pollset_reset(grpc_pollset *pollset) {
-  GPR_ASSERT(pollset->shutting_down);
-  GPR_ASSERT(
-      !has_workers(&pollset->root_worker, GRPC_POLLSET_WORKER_LINK_POLLSET));
-  pollset->shutting_down = 0;
-  pollset->is_iocp_worker = 0;
-  pollset->kicked_without_pollers = 0;
-  pollset->on_shutdown = NULL;
-}
-
 grpc_error *grpc_pollset_work(grpc_exec_ctx *exec_ctx, grpc_pollset *pollset,
                               grpc_pollset_worker **worker_hdl,
                               gpr_timespec now, gpr_timespec deadline) {
   grpc_pollset_worker worker;
-  *worker_hdl = &worker;
+  if (worker_hdl) *worker_hdl = &worker;
 
   int added_worker = 0;
   worker.links[GRPC_POLLSET_WORKER_LINK_POLLSET].next =
@@ -167,8 +156,7 @@ grpc_error *grpc_pollset_work(grpc_exec_ctx *exec_ctx, grpc_pollset *pollset,
       }
 
       if (pollset->shutting_down && pollset->on_shutdown != NULL) {
-        grpc_exec_ctx_sched(exec_ctx, pollset->on_shutdown, GRPC_ERROR_NONE,
-                            NULL);
+        grpc_closure_sched(exec_ctx, pollset->on_shutdown, GRPC_ERROR_NONE);
         pollset->on_shutdown = NULL;
       }
       goto done;
@@ -197,7 +185,7 @@ done:
     remove_worker(&worker, GRPC_POLLSET_WORKER_LINK_POLLSET);
   }
   gpr_cv_destroy(&worker.cv);
-  *worker_hdl = NULL;
+  if (worker_hdl) *worker_hdl = NULL;
   return GRPC_ERROR_NONE;
 }
 
@@ -241,4 +229,4 @@ grpc_error *grpc_pollset_kick(grpc_pollset *p,
 
 void grpc_kick_poller(void) { grpc_iocp_kick(); }
 
-#endif /* GPR_WINSOCK_SOCKET */
+#endif /* GRPC_WINSOCK_SOCKET */

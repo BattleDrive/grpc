@@ -63,6 +63,21 @@ RUN apt-get update && apt-get install -y \
 # Build profiling
 RUN apt-get update && apt-get install -y time && apt-get clean
 
+#====================
+# Python dependencies
+
+# Install dependencies
+
+RUN apt-get update && apt-get install -y \
+    python-all-dev \
+    python3-all-dev \
+    python-pip
+
+# Install Python packages from PyPI
+RUN pip install pip --upgrade
+RUN pip install virtualenv
+RUN pip install futures==2.2.0 enum34==1.0.4 protobuf==3.2.0 six==1.10.0
+
 #========================
 # Sanity test dependencies
 RUN apt-get update && apt-get install -y \
@@ -78,19 +93,31 @@ RUN pip install simplejson mako
 #======================================
 # More sanity test dependencies (bazel)
 RUN apt-get install -y openjdk-8-jdk
-# TOOD(jtattermusch): pin the bazel version
-RUN git clone https://github.com/bazelbuild/bazel.git /bazel
-RUN cd /bazel && ./compile.sh
+# Check out Bazel version 0.4.1 since this version allows running
+# ./compile.sh without a local protoc dependency
+# TODO(mattkwong): install dependencies to support latest Bazel version if newer
+# version is needed
+RUN git clone https://github.com/bazelbuild/bazel.git /bazel && \
+  cd /bazel && git checkout tags/0.4.1 && ./compile.sh
 RUN ln -s /bazel/output/bazel /bin/
 
-#===================
-# Docker "inception"
-# Note this is quite the ugly hack.
-# This makes sure that the docker binary we inject has its dependencies.
-RUN curl https://get.docker.com/ | sh
-RUN apt-get remove --purge -y docker-engine
+RUN apt-get update && apt-get -y install wget
+RUN echo deb http://llvm.org/apt/wily/ llvm-toolchain-wily-3.8 main >> /etc/apt/sources.list
+RUN echo deb-src http://llvm.org/apt/wily/ llvm-toolchain-wily-3.8 main >> /etc/apt/sources.list
+RUN wget -O - http://llvm.org/apt/llvm-snapshot.gpg.key| apt-key add -
+RUN apt-get update && apt-get -y install clang-format-3.8
+
+# Prepare ccache
+RUN ln -s /usr/bin/ccache /usr/local/bin/gcc
+RUN ln -s /usr/bin/ccache /usr/local/bin/g++
+RUN ln -s /usr/bin/ccache /usr/local/bin/cc
+RUN ln -s /usr/bin/ccache /usr/local/bin/c++
+RUN ln -s /usr/bin/ccache /usr/local/bin/clang
+RUN ln -s /usr/bin/ccache /usr/local/bin/clang++
+
 
 RUN mkdir /var/local/jenkins
+
 
 # Define the default command.
 CMD ["bash"]

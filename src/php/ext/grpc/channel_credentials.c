@@ -97,7 +97,7 @@ zval *grpc_php_wrap_channel_credentials(grpc_channel_credentials
 
 /**
  * Set default roots pem.
- * @param string pem_roots PEM encoding of the server root certificates
+ * @param string $pem_roots PEM encoding of the server root certificates
  * @return void
  */
 PHP_METHOD(ChannelCredentials, setDefaultRootsPem) {
@@ -121,19 +121,17 @@ PHP_METHOD(ChannelCredentials, setDefaultRootsPem) {
  */
 PHP_METHOD(ChannelCredentials, createDefault) {
   grpc_channel_credentials *creds = grpc_google_default_credentials_create();
-  zval *creds_object;
-  PHP_GRPC_MAKE_STD_ZVAL(creds_object);
-  creds_object = grpc_php_wrap_channel_credentials(creds TSRMLS_CC);
+  zval *creds_object = grpc_php_wrap_channel_credentials(creds TSRMLS_CC);
   RETURN_DESTROY_ZVAL(creds_object);
 }
 
 /**
  * Create SSL credentials.
- * @param string pem_root_certs PEM encoding of the server root certificates
- * @param string pem_private_key PEM encoding of the client's private key
- *     (optional)
- * @param string pem_cert_chain PEM encoding of the client's certificate chain
- *     (optional)
+ * @param string $pem_root_certs PEM encoding of the server root certificates
+ * @param string $pem_key_cert_pair.private_key PEM encoding of the client's
+ *                                              private key (optional)
+ * @param string $pem_key_cert_pair.cert_chain PEM encoding of the client's
+ *                                             certificate chain (optional)
  * @return ChannelCredentials The new SSL credentials object
  */
 PHP_METHOD(ChannelCredentials, createSsl) {
@@ -160,16 +158,14 @@ PHP_METHOD(ChannelCredentials, createSsl) {
   grpc_channel_credentials *creds = grpc_ssl_credentials_create(
       pem_root_certs,
       pem_key_cert_pair.private_key == NULL ? NULL : &pem_key_cert_pair, NULL);
-  zval *creds_object;
-  PHP_GRPC_MAKE_STD_ZVAL(creds_object);
-  creds_object = grpc_php_wrap_channel_credentials(creds TSRMLS_CC);
+  zval *creds_object = grpc_php_wrap_channel_credentials(creds TSRMLS_CC);
   RETURN_DESTROY_ZVAL(creds_object);
 }
 
 /**
  * Create composite credentials from two existing credentials.
- * @param ChannelCredentials cred1 The first credential
- * @param CallCredentials cred2 The second credential
+ * @param ChannelCredentials $cred1_obj The first credential
+ * @param CallCredentials $cred2_obj The second credential
  * @return ChannelCredentials The new composite credentials object
  */
 PHP_METHOD(ChannelCredentials, createComposite) {
@@ -191,9 +187,7 @@ PHP_METHOD(ChannelCredentials, createComposite) {
   grpc_channel_credentials *creds =
       grpc_composite_channel_credentials_create(cred1->wrapped, cred2->wrapped,
                                                 NULL);
-  zval *creds_object;
-  PHP_GRPC_MAKE_STD_ZVAL(creds_object);
-  creds_object = grpc_php_wrap_channel_credentials(creds TSRMLS_CC);
+  zval *creds_object = grpc_php_wrap_channel_credentials(creds TSRMLS_CC);
   RETURN_DESTROY_ZVAL(creds_object);
 }
 
@@ -205,16 +199,37 @@ PHP_METHOD(ChannelCredentials, createInsecure) {
   RETURN_NULL();
 }
 
+ZEND_BEGIN_ARG_INFO_EX(arginfo_setDefaultRootsPem, 0, 0, 1)
+  ZEND_ARG_INFO(0, pem_roots)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_createDefault, 0, 0, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_createSsl, 0, 0, 0)
+  ZEND_ARG_INFO(0, pem_root_certs)
+  ZEND_ARG_INFO(0, pem_private_key)
+  ZEND_ARG_INFO(0, pem_cert_chain)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_createComposite, 0, 0, 2)
+  ZEND_ARG_INFO(0, channel_creds)
+  ZEND_ARG_INFO(0, call_creds)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_createInsecure, 0, 0, 0)
+ZEND_END_ARG_INFO()
+
 static zend_function_entry channel_credentials_methods[] = {
-  PHP_ME(ChannelCredentials, setDefaultRootsPem, NULL,
+  PHP_ME(ChannelCredentials, setDefaultRootsPem, arginfo_setDefaultRootsPem,
          ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
-  PHP_ME(ChannelCredentials, createDefault, NULL,
+  PHP_ME(ChannelCredentials, createDefault, arginfo_createDefault,
          ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
-  PHP_ME(ChannelCredentials, createSsl, NULL,
+  PHP_ME(ChannelCredentials, createSsl, arginfo_createSsl,
          ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
-  PHP_ME(ChannelCredentials, createComposite, NULL,
+  PHP_ME(ChannelCredentials, createComposite, arginfo_createComposite,
          ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
-  PHP_ME(ChannelCredentials, createInsecure, NULL,
+  PHP_ME(ChannelCredentials, createInsecure, arginfo_createInsecure,
          ZEND_ACC_PUBLIC | ZEND_ACC_STATIC)
   PHP_FE_END
 };

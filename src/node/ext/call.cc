@@ -45,8 +45,10 @@
 #include "byte_buffer.h"
 #include "call.h"
 #include "channel.h"
+#include "completion_queue.h"
 #include "completion_queue_async_worker.h"
 #include "call_credentials.h"
+#include "slice.h"
 #include "timeval.h"
 
 using std::unique_ptr;
@@ -95,10 +97,8 @@ Local<Value> nanErrorWithCode(const char *msg, grpc_call_error code) {
   return scope.Escape(err);
 }
 
-bool CreateMetadataArray(Local<Object> metadata, grpc_metadata_array *array,
-                         shared_ptr<Resources> resources) {
+bool CreateMetadataArray(Local<Object> metadata, grpc_metadata_array *array) {
   HandleScope scope;
-  grpc_metadata_array_init(array);
   Local<Array> keys = Nan::GetOwnPropertyNames(metadata).ToLocalChecked();
   for (unsigned int i = 0; i < keys->Length(); i++) {
     Local<String> current_key = Nan::To<String>(
@@ -110,34 +110,29 @@ bool CreateMetadataArray(Local<Object> metadata, grpc_metadata_array *array,
     array->capacity += Local<Array>::Cast(value_array)->Length();
   }
   array->metadata = reinterpret_cast<grpc_metadata*>(
-      gpr_malloc(array->capacity * sizeof(grpc_metadata)));
+      gpr_zalloc(array->capacity * sizeof(grpc_metadata)));
   for (unsigned int i = 0; i < keys->Length(); i++) {
-    Local<String> current_key(keys->Get(i)->ToString());
-    Utf8String *utf8_key = new Utf8String(current_key);
-    resources->strings.push_back(unique_ptr<Utf8String>(utf8_key));
+    Local<String> current_key(Nan::To<String>(keys->Get(i)).ToLocalChecked());
     Local<Array> values = Local<Array>::Cast(
         Nan::Get(metadata, current_key).ToLocalChecked());
+    grpc_slice key_slice = CreateSliceFromString(current_key);
+    grpc_slice key_intern_slice = grpc_slice_intern(key_slice);
+    grpc_slice_unref(key_slice);
     for (unsigned int j = 0; j < values->Length(); j++) {
       Local<Value> value = Nan::Get(values, j).ToLocalChecked();
       grpc_metadata *current = &array->metadata[array->count];
-      current->key = **utf8_key;
+      current->key = key_intern_slice;
       // Only allow binary headers for "-bin" keys
-      if (grpc_is_binary_header(current->key, strlen(current->key))) {
+      if (grpc_is_binary_header(key_intern_slice)) {
         if (::node::Buffer::HasInstance(value)) {
-          current->value = ::node::Buffer::Data(value);
-          current->value_length = ::node::Buffer::Length(value);
-          PersistentValue *handle = new PersistentValue(value);
-          resources->handles.push_back(unique_ptr<PersistentValue>(handle));
+          current->value = CreateSliceFromBuffer(value);
         } else {
           return false;
         }
       } else {
         if (value->IsString()) {
           Local<String> string_value = Nan::To<String>(value).ToLocalChecked();
-          Utf8String *utf8_value = new Utf8String(string_value);
-          resources->strings.push_back(unique_ptr<Utf8String>(utf8_value));
-          current->value = **utf8_value;
-          current->value_length = string_value->Length();
+          current->value = CreateSliceFromString(string_value);
         } else {
           return false;
         }
@@ -148,44 +143,37 @@ bool CreateMetadataArray(Local<Object> metadata, grpc_metadata_array *array,
   return true;
 }
 
+void DestroyMetadataArray(grpc_metadata_array *array) {
+  for (size_t i = 0; i < array->count; i++) {
+    // Don't unref keys because they are interned
+    grpc_slice_unref(array->metadata[i].value);
+  }
+  grpc_metadata_array_destroy(array);
+}
+
 Local<Value> ParseMetadata(const grpc_metadata_array *metadata_array) {
   EscapableHandleScope scope;
   grpc_metadata *metadata_elements = metadata_array->metadata;
   size_t length = metadata_array->count;
-  std::map<const char*, size_t> size_map;
-  std::map<const char*, size_t> index_map;
-
-  for (unsigned int i = 0; i < length; i++) {
-    const char *key = metadata_elements[i].key;
-    if (size_map.count(key)) {
-      size_map[key] += 1;
-    } else {
-      size_map[key] = 1;
-    }
-    index_map[key] = 0;
-  }
   Local<Object> metadata_object = Nan::New<Object>();
   for (unsigned int i = 0; i < length; i++) {
     grpc_metadata* elem = &metadata_elements[i];
-    Local<String> key_string = Nan::New(elem->key).ToLocalChecked();
+    // TODO(murgatroid99): Use zero-copy string construction instead
+    Local<String> key_string = CopyStringFromSlice(elem->key);
     Local<Array> array;
     MaybeLocal<Value> maybe_array = Nan::Get(metadata_object, key_string);
     if (maybe_array.IsEmpty() || !maybe_array.ToLocalChecked()->IsArray()) {
-      array = Nan::New<Array>(size_map[elem->key]);
+      array = Nan::New<Array>(0);
       Nan::Set(metadata_object, key_string, array);
     } else {
       array = Local<Array>::Cast(maybe_array.ToLocalChecked());
     }
-    if (grpc_is_binary_header(elem->key, strlen(elem->key))) {
-      Nan::Set(array, index_map[elem->key],
-               MakeFastBuffer(
-                   Nan::CopyBuffer(elem->value,
-                                   elem->value_length).ToLocalChecked()));
+    if (grpc_is_binary_header(elem->key)) {
+      Nan::Set(array, array->Length(), CreateBufferFromSlice(elem->value));
     } else {
-      Nan::Set(array, index_map[elem->key],
-               Nan::New(elem->value).ToLocalChecked());
+      // TODO(murgatroid99): Use zero-copy string construction instead
+      Nan::Set(array, array->Length(), CopyStringFromSlice(elem->value));
     }
-    index_map[elem->key] += 1;
   }
   return scope.Escape(metadata_object);
 }
@@ -200,32 +188,43 @@ Op::~Op() {
 
 class SendMetadataOp : public Op {
  public:
+  SendMetadataOp() {
+    grpc_metadata_array_init(&send_metadata);
+  }
+  ~SendMetadataOp() {
+    DestroyMetadataArray(&send_metadata);
+  }
   Local<Value> GetNodeValue() const {
     EscapableHandleScope scope;
     return scope.Escape(Nan::True());
   }
-  bool ParseOp(Local<Value> value, grpc_op *out,
-               shared_ptr<Resources> resources) {
+  bool ParseOp(Local<Value> value, grpc_op *out) {
     if (!value->IsObject()) {
       return false;
     }
-    grpc_metadata_array array;
     MaybeLocal<Object> maybe_metadata = Nan::To<Object>(value);
     if (maybe_metadata.IsEmpty()) {
       return false;
     }
     if (!CreateMetadataArray(maybe_metadata.ToLocalChecked(),
-                             &array, resources)) {
+                             &send_metadata)) {
       return false;
     }
-    out->data.send_initial_metadata.count = array.count;
-    out->data.send_initial_metadata.metadata = array.metadata;
+    out->data.send_initial_metadata.count = send_metadata.count;
+    out->data.send_initial_metadata.metadata = send_metadata.metadata;
     return true;
+  }
+  bool IsFinalOp() {
+    return false;
+  }
+  void OnComplete(bool success) {
   }
  protected:
   std::string GetTypeString() const {
     return "send_metadata";
   }
+ private:
+  grpc_metadata_array send_metadata;
 };
 
 class SendMessageOp : public Op {
@@ -242,8 +241,7 @@ class SendMessageOp : public Op {
     EscapableHandleScope scope;
     return scope.Escape(Nan::True());
   }
-  bool ParseOp(Local<Value> value, grpc_op *out,
-               shared_ptr<Resources> resources) {
+  bool ParseOp(Local<Value> value, grpc_op *out) {
     if (!::node::Buffer::HasInstance(value)) {
       return false;
     }
@@ -258,10 +256,13 @@ class SendMessageOp : public Op {
       }
     }
     send_message = BufferToByteBuffer(value);
-    out->data.send_message = send_message;
-    PersistentValue *handle = new PersistentValue(value);
-    resources->handles.push_back(unique_ptr<PersistentValue>(handle));
+    out->data.send_message.send_message = send_message;
     return true;
+  }
+  bool IsFinalOp() {
+    return false;
+  }
+  void OnComplete(bool success) {
   }
  protected:
   std::string GetTypeString() const {
@@ -277,9 +278,13 @@ class SendClientCloseOp : public Op {
     EscapableHandleScope scope;
     return scope.Escape(Nan::True());
   }
-  bool ParseOp(Local<Value> value, grpc_op *out,
-               shared_ptr<Resources> resources) {
+  bool ParseOp(Local<Value> value, grpc_op *out) {
     return true;
+  }
+  bool IsFinalOp() {
+    return false;
+  }
+  void OnComplete(bool success) {
   }
  protected:
   std::string GetTypeString() const {
@@ -289,12 +294,18 @@ class SendClientCloseOp : public Op {
 
 class SendServerStatusOp : public Op {
  public:
+  SendServerStatusOp() {
+    grpc_metadata_array_init(&status_metadata);
+  }
+  ~SendServerStatusOp() {
+    grpc_slice_unref(details);
+    DestroyMetadataArray(&status_metadata);
+  }
   Local<Value> GetNodeValue() const {
     EscapableHandleScope scope;
     return scope.Escape(Nan::True());
   }
-  bool ParseOp(Local<Value> value, grpc_op *out,
-               shared_ptr<Resources> resources) {
+  bool ParseOp(Local<Value> value, grpc_op *out) {
     if (!value->IsObject()) {
       return false;
     }
@@ -328,23 +339,32 @@ class SendServerStatusOp : public Op {
     }
     Local<String> details = Nan::To<String>(
         maybe_details.ToLocalChecked()).ToLocalChecked();
-    grpc_metadata_array array;
-    if (!CreateMetadataArray(metadata, &array, resources)) {
+    if (!CreateMetadataArray(metadata, &status_metadata)) {
       return false;
     }
-    out->data.send_status_from_server.trailing_metadata_count = array.count;
-    out->data.send_status_from_server.trailing_metadata = array.metadata;
+    out->data.send_status_from_server.trailing_metadata_count =
+        status_metadata.count;
+    out->data.send_status_from_server.trailing_metadata =
+        status_metadata.metadata;
     out->data.send_status_from_server.status =
         static_cast<grpc_status_code>(code);
-    Utf8String *str = new Utf8String(details);
-    resources->strings.push_back(unique_ptr<Utf8String>(str));
-    out->data.send_status_from_server.status_details = **str;
+    this->details = CreateSliceFromString(details);
+    out->data.send_status_from_server.status_details = &this->details;
     return true;
+  }
+  bool IsFinalOp() {
+    return true;
+  }
+  void OnComplete(bool success) {
   }
  protected:
   std::string GetTypeString() const {
     return "send_status";
   }
+
+ private:
+  grpc_slice details;
+  grpc_metadata_array status_metadata;
 };
 
 class GetMetadataOp : public Op {
@@ -362,10 +382,14 @@ class GetMetadataOp : public Op {
     return scope.Escape(ParseMetadata(&recv_metadata));
   }
 
-  bool ParseOp(Local<Value> value, grpc_op *out,
-               shared_ptr<Resources> resources) {
-    out->data.recv_initial_metadata = &recv_metadata;
+  bool ParseOp(Local<Value> value, grpc_op *out) {
+    out->data.recv_initial_metadata.recv_initial_metadata = &recv_metadata;
     return true;
+  }
+  bool IsFinalOp() {
+    return false;
+  }
+  void OnComplete(bool success) {
   }
 
  protected:
@@ -392,10 +416,14 @@ class ReadMessageOp : public Op {
     return scope.Escape(ByteBufferToBuffer(recv_message));
   }
 
-  bool ParseOp(Local<Value> value, grpc_op *out,
-               shared_ptr<Resources> resources) {
-    out->data.recv_message = &recv_message;
+  bool ParseOp(Local<Value> value, grpc_op *out) {
+    out->data.recv_message.recv_message = &recv_message;
     return true;
+  }
+  bool IsFinalOp() {
+    return false;
+  }
+  void OnComplete(bool success) {
   }
 
  protected:
@@ -411,21 +439,16 @@ class ClientStatusOp : public Op {
  public:
   ClientStatusOp() {
     grpc_metadata_array_init(&metadata_array);
-    status_details = NULL;
-    details_capacity = 0;
   }
 
   ~ClientStatusOp() {
     grpc_metadata_array_destroy(&metadata_array);
-    gpr_free(status_details);
   }
 
-  bool ParseOp(Local<Value> value, grpc_op *out,
-               shared_ptr<Resources> resources) {
+  bool ParseOp(Local<Value> value, grpc_op *out) {
     out->data.recv_status_on_client.trailing_metadata = &metadata_array;
     out->data.recv_status_on_client.status = &status;
     out->data.recv_status_on_client.status_details = &status_details;
-    out->data.recv_status_on_client.status_details_capacity = &details_capacity;
     return true;
   }
 
@@ -434,13 +457,16 @@ class ClientStatusOp : public Op {
     Local<Object> status_obj = Nan::New<Object>();
     Nan::Set(status_obj, Nan::New("code").ToLocalChecked(),
                     Nan::New<Number>(status));
-    if (status_details != NULL) {
-      Nan::Set(status_obj, Nan::New("details").ToLocalChecked(),
-               Nan::New(status_details).ToLocalChecked());
-    }
+    Nan::Set(status_obj, Nan::New("details").ToLocalChecked(),
+               CopyStringFromSlice(status_details));
     Nan::Set(status_obj, Nan::New("metadata").ToLocalChecked(),
              ParseMetadata(&metadata_array));
     return scope.Escape(status_obj);
+  }
+  bool IsFinalOp() {
+    return true;
+  }
+  void OnComplete(bool success) {
   }
  protected:
   std::string GetTypeString() const {
@@ -449,8 +475,7 @@ class ClientStatusOp : public Op {
  private:
   grpc_metadata_array metadata_array;
   grpc_status_code status;
-  char *status_details;
-  size_t details_capacity;
+  grpc_slice status_details;
 };
 
 class ServerCloseResponseOp : public Op {
@@ -460,10 +485,14 @@ class ServerCloseResponseOp : public Op {
     return scope.Escape(Nan::New<Boolean>(cancelled));
   }
 
-  bool ParseOp(Local<Value> value, grpc_op *out,
-               shared_ptr<Resources> resources) {
+  bool ParseOp(Local<Value> value, grpc_op *out) {
     out->data.recv_close_on_server.cancelled = &cancelled;
     return true;
+  }
+  bool IsFinalOp() {
+    return false;
+  }
+  void OnComplete(bool success) {
   }
 
  protected:
@@ -475,9 +504,10 @@ class ServerCloseResponseOp : public Op {
   int cancelled;
 };
 
-tag::tag(Callback *callback, OpVec *ops,
-         shared_ptr<Resources> resources) :
-    callback(callback), ops(ops), resources(resources){
+tag::tag(Callback *callback, OpVec *ops, Call *call, Local<Value> call_value) :
+    callback(callback), ops(ops), call(call){
+  HandleScope scope;
+  call_persist.Reset(call_value);
 }
 
 tag::~tag() {
@@ -485,21 +515,37 @@ tag::~tag() {
   delete ops;
 }
 
-Local<Value> GetTagNodeValue(void *tag) {
-  EscapableHandleScope scope;
+void CompleteTag(void *tag, const char *error_message) {
+  HandleScope scope;
   struct tag *tag_struct = reinterpret_cast<struct tag *>(tag);
-  Local<Object> tag_obj = Nan::New<Object>();
+  Callback *callback = tag_struct->callback;
+  if (error_message == NULL) {
+    Local<Object> tag_obj = Nan::New<Object>();
+    for (vector<unique_ptr<Op> >::iterator it = tag_struct->ops->begin();
+         it != tag_struct->ops->end(); ++it) {
+      Op *op_ptr = it->get();
+      Nan::Set(tag_obj, op_ptr->GetOpType(), op_ptr->GetNodeValue());
+    }
+    Local<Value> argv[] = {Nan::Null(), tag_obj};
+    callback->Call(2, argv);
+  } else {
+    Local<Value> argv[] = {Nan::Error(error_message)};
+    callback->Call(1, argv);
+  }
+  bool success = (error_message == NULL);
+  bool is_final_op = false;
   for (vector<unique_ptr<Op> >::iterator it = tag_struct->ops->begin();
        it != tag_struct->ops->end(); ++it) {
     Op *op_ptr = it->get();
-    Nan::Set(tag_obj, op_ptr->GetOpType(), op_ptr->GetNodeValue());
+    op_ptr->OnComplete(success);
+    if (op_ptr->IsFinalOp()) {
+      is_final_op = true;
+    }
   }
-  return scope.Escape(tag_obj);
-}
-
-Callback *GetTagCallback(void *tag) {
-  struct tag *tag_struct = reinterpret_cast<struct tag *>(tag);
-  return tag_struct->callback;
+  if (tag_struct->call == NULL) {
+    return;
+  }
+  tag_struct->call->CompleteBatch(is_final_op);
 }
 
 void DestroyTag(void *tag) {
@@ -507,11 +553,20 @@ void DestroyTag(void *tag) {
   delete tag_struct;
 }
 
-Call::Call(grpc_call *call) : wrapped_call(call) {
+void Call::DestroyCall() {
+  if (this->wrapped_call != NULL) {
+    grpc_call_destroy(this->wrapped_call);
+    this->wrapped_call = NULL;
+  }
+}
+
+Call::Call(grpc_call *call) : wrapped_call(call),
+                              pending_batches(0),
+                              has_final_op_completed(false) {
 }
 
 Call::~Call() {
-  grpc_call_destroy(wrapped_call);
+  DestroyCall();
 }
 
 void Call::Init(Local<Object> exports) {
@@ -552,7 +607,25 @@ Local<Value> Call::WrapStruct(grpc_call *call) {
   }
 }
 
+void Call::CompleteBatch(bool is_final_op) {
+  if (is_final_op) {
+    this->has_final_op_completed = true;
+  }
+  this->pending_batches--;
+  if (this->has_final_op_completed && this->pending_batches == 0) {
+    this->DestroyCall();
+  }
+}
+
 NAN_METHOD(Call::New) {
+  /* Arguments:
+   * 0: Channel to make the call on
+   * 1: Method
+   * 2: Deadline
+   * 3: host
+   * 4: parent Call
+   * 5: propagation flags
+   */
   if (info.IsConstructCall()) {
     Call *call;
     if (info[0]->IsExternal()) {
@@ -594,24 +667,29 @@ NAN_METHOD(Call::New) {
       if (channel->GetWrappedChannel() == NULL) {
         return Nan::ThrowError("Call cannot be created from a closed channel");
       }
-      Utf8String method(info[1]);
       double deadline = Nan::To<double>(info[2]).FromJust();
       grpc_channel *wrapped_channel = channel->GetWrappedChannel();
       grpc_call *wrapped_call;
+      grpc_slice method = CreateSliceFromString(
+          Nan::To<String>(info[1]).ToLocalChecked());
       if (info[3]->IsString()) {
-        Utf8String host_override(info[3]);
+        grpc_slice *host = new grpc_slice;
+        *host = CreateSliceFromString(
+            Nan::To<String>(info[3]).ToLocalChecked());
         wrapped_call = grpc_channel_create_call(
             wrapped_channel, parent_call, propagate_flags,
-            CompletionQueueAsyncWorker::GetQueue(), *method,
-            *host_override, MillisecondsToTimespec(deadline), NULL);
+            GetCompletionQueue(), method,
+            host, MillisecondsToTimespec(deadline), NULL);
+        delete host;
       } else if (info[3]->IsUndefined() || info[3]->IsNull()) {
         wrapped_call = grpc_channel_create_call(
             wrapped_channel, parent_call, propagate_flags,
-            CompletionQueueAsyncWorker::GetQueue(), *method,
+            GetCompletionQueue(), method,
             NULL, MillisecondsToTimespec(deadline), NULL);
       } else {
         return Nan::ThrowTypeError("Call's fourth argument must be a string");
       }
+      grpc_slice_unref(method);
       call = new Call(wrapped_call);
       Nan::Set(info.This(), Nan::New("channel_").ToLocalChecked(),
                channel_object);
@@ -644,7 +722,6 @@ NAN_METHOD(Call::StartBatch) {
   }
   Local<Function> callback_func = info[1].As<Function>();
   Call *call = ObjectWrap::Unwrap<Call>(info.This());
-  shared_ptr<Resources> resources(new Resources);
   Local<Object> obj = Nan::To<Object>(info[0]).ToLocalChecked();
   Local<Array> keys = Nan::GetOwnPropertyNames(obj).ToLocalChecked();
   size_t nops = keys->Length();
@@ -689,7 +766,7 @@ NAN_METHOD(Call::StartBatch) {
       default:
         return Nan::ThrowError("Argument object had an unrecognized key");
     }
-    if (!op->ParseOp(obj->Get(type), &ops[i], resources)) {
+    if (!op->ParseOp(obj->Get(type), &ops[i])) {
       return Nan::ThrowTypeError("Incorrectly typed arguments to startBatch");
     }
     op_vector->push_back(std::move(op));
@@ -697,11 +774,12 @@ NAN_METHOD(Call::StartBatch) {
   Callback *callback = new Callback(callback_func);
   grpc_call_error error = grpc_call_start_batch(
       call->wrapped_call, &ops[0], nops, new struct tag(
-          callback, op_vector.release(), resources), NULL);
+          callback, op_vector.release(), call, info.This()), NULL);
   if (error != GRPC_CALL_OK) {
     return Nan::ThrowError(nanErrorWithCode("startBatch failed", error));
   }
-  CompletionQueueAsyncWorker::Next();
+  call->pending_batches++;
+  CompletionQueueNext();
 }
 
 NAN_METHOD(Call::Cancel) {

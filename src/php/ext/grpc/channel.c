@@ -125,7 +125,7 @@ void php_grpc_read_args_array(zval *args_array,
  * "credentials" key mapping to a ChannelCredentials object, a secure channel
  * will be created with those credentials.
  * @param string $target The hostname to associate with this channel
- * @param array $args The arguments to pass to the Channel (optional)
+ * @param array $args_array The arguments to pass to the Channel
  */
 PHP_METHOD(Channel, __construct) {
   wrapped_grpc_channel *channel = Z_WRAPPED_GRPC_CHANNEL_P(getThis());
@@ -182,7 +182,7 @@ PHP_METHOD(Channel, getTarget) {
 
 /**
  * Get the connectivity state of the channel
- * @param bool (optional) try to connect on the channel
+ * @param bool $try_to_connect Try to connect on the channel (optional)
  * @return long The grpc connectivity state
  */
 PHP_METHOD(Channel, getConnectivityState) {
@@ -202,8 +202,8 @@ PHP_METHOD(Channel, getConnectivityState) {
 
 /**
  * Watch the connectivity state of the channel until it changed
- * @param long The previous connectivity state of the channel
- * @param Timeval The deadline this function should wait until
+ * @param long $last_state The previous connectivity state of the channel
+ * @param Timeval $deadline_obj The deadline this function should wait until
  * @return bool If the connectivity state changes from last_state
  *              before deadline
  */
@@ -233,6 +233,7 @@ PHP_METHOD(Channel, watchConnectivityState) {
 
 /**
  * Close the channel
+ * @return void
  */
 PHP_METHOD(Channel, close) {
   wrapped_grpc_channel *channel = Z_WRAPPED_GRPC_CHANNEL_P(getThis());
@@ -242,12 +243,37 @@ PHP_METHOD(Channel, close) {
   }
 }
 
+ZEND_BEGIN_ARG_INFO_EX(arginfo_construct, 0, 0, 2)
+  ZEND_ARG_INFO(0, target)
+  ZEND_ARG_INFO(0, args)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_getTarget, 0, 0, 0)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_getConnectivityState, 0, 0, 0)
+  ZEND_ARG_INFO(0, try_to_connect)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_watchConnectivityState, 0, 0, 2)
+  ZEND_ARG_INFO(0, last_state)
+  ZEND_ARG_INFO(0, deadline)
+ZEND_END_ARG_INFO()
+
+ZEND_BEGIN_ARG_INFO_EX(arginfo_close, 0, 0, 0)
+ZEND_END_ARG_INFO()
+
 static zend_function_entry channel_methods[] = {
-  PHP_ME(Channel, __construct, NULL, ZEND_ACC_PUBLIC | ZEND_ACC_CTOR)
-  PHP_ME(Channel, getTarget, NULL, ZEND_ACC_PUBLIC)
-  PHP_ME(Channel, getConnectivityState, NULL, ZEND_ACC_PUBLIC)
-  PHP_ME(Channel, watchConnectivityState, NULL, ZEND_ACC_PUBLIC)
-  PHP_ME(Channel, close, NULL, ZEND_ACC_PUBLIC)
+  PHP_ME(Channel, __construct, arginfo_construct,
+         ZEND_ACC_PUBLIC | ZEND_ACC_CTOR)
+  PHP_ME(Channel, getTarget, arginfo_getTarget,
+         ZEND_ACC_PUBLIC)
+  PHP_ME(Channel, getConnectivityState, arginfo_getConnectivityState,
+         ZEND_ACC_PUBLIC)
+  PHP_ME(Channel, watchConnectivityState, arginfo_watchConnectivityState,
+         ZEND_ACC_PUBLIC)
+  PHP_ME(Channel, close, arginfo_close,
+         ZEND_ACC_PUBLIC)
   PHP_FE_END
 };
 

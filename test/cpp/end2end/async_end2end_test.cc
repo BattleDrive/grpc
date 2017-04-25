@@ -42,11 +42,13 @@
 #include <grpc++/server_builder.h>
 #include <grpc++/server_context.h>
 #include <grpc/grpc.h>
+#include <grpc/support/log.h>
 #include <grpc/support/thd.h>
 #include <grpc/support/time.h>
 #include <grpc/support/tls.h>
 #include <gtest/gtest.h>
 
+#include "src/core/lib/iomgr/port.h"
 #include "src/proto/grpc/testing/duplicate/echo_duplicate.grpc.pb.h"
 #include "src/proto/grpc/testing/echo.grpc.pb.h"
 #include "test/core/util/port.h"
@@ -54,7 +56,7 @@
 #include "test/cpp/util/string_ref_helper.h"
 #include "test/cpp/util/test_credentials_provider.h"
 
-#ifdef GPR_POSIX_SOCKET
+#ifdef GRPC_POSIX_SOCKET
 #include "src/core/lib/iomgr/ev_posix.h"
 #endif
 
@@ -73,7 +75,7 @@ namespace {
 void* tag(int i) { return (void*)(intptr_t)i; }
 int detag(void* p) { return static_cast<int>(reinterpret_cast<intptr_t>(p)); }
 
-#ifdef GPR_POSIX_SOCKET
+#ifdef GRPC_POSIX_SOCKET
 static int maybe_assert_non_blocking_poll(struct pollfd* pfds, nfds_t nfds,
                                           int timeout) {
   if (gpr_tls_get(&g_is_async_end2end_test)) {
@@ -200,24 +202,23 @@ class Verifier {
   bool spin_;
 };
 
+bool plugin_has_sync_methods(std::unique_ptr<ServerBuilderPlugin>& plugin) {
+  return plugin->has_sync_methods();
+}
+
 // This class disables the server builder plugins that may add sync services to
 // the server. If there are sync services, UnimplementedRpc test will triger
 // the sync unkown rpc routine on the server side, rather than the async one
 // that needs to be tested here.
 class ServerBuilderSyncPluginDisabler : public ::grpc::ServerBuilderOption {
  public:
-  void UpdateArguments(ChannelArguments* arg) GRPC_OVERRIDE {}
+  void UpdateArguments(ChannelArguments* arg) override {}
 
-  void UpdatePlugins(std::vector<std::unique_ptr<ServerBuilderPlugin>>* plugins)
-      GRPC_OVERRIDE {
-    auto plugin = plugins->begin();
-    while (plugin != plugins->end()) {
-      if ((*plugin)->has_sync_methods()) {
-        plugins->erase(plugin++);
-      } else {
-        plugin++;
-      }
-    }
+  void UpdatePlugins(
+      std::vector<std::unique_ptr<ServerBuilderPlugin>>* plugins) override {
+    plugins->erase(std::remove_if(plugins->begin(), plugins->end(),
+                                  plugin_has_sync_methods),
+                   plugins->end());
   }
 };
 
@@ -228,12 +229,7 @@ class TestScenario {
       : disable_blocking(non_block),
         credentials_type(creds_type),
         message_content(content) {}
-  void Log() const {
-    gpr_log(
-        GPR_INFO,
-        "Scenario: disable_blocking %d, credentials %s, message size %" PRIuPTR,
-        disable_blocking, credentials_type.c_str(), message_content.size());
-  }
+  void Log() const;
   bool disable_blocking;
   // Although the below grpc::string's are logically const, we can't declare
   // them const because of a limitation in the way old compilers (e.g., gcc-4.4)
@@ -242,11 +238,25 @@ class TestScenario {
   grpc::string message_content;
 };
 
+static std::ostream& operator<<(std::ostream& out,
+                                const TestScenario& scenario) {
+  return out << "TestScenario{disable_blocking="
+             << (scenario.disable_blocking ? "true" : "false")
+             << ", credentials='" << scenario.credentials_type
+             << "', message_size=" << scenario.message_content.size() << "}";
+}
+
+void TestScenario::Log() const {
+  std::ostringstream out;
+  out << *this;
+  gpr_log(GPR_DEBUG, "%s", out.str().c_str());
+}
+
 class AsyncEnd2endTest : public ::testing::TestWithParam<TestScenario> {
  protected:
   AsyncEnd2endTest() { GetParam().Log(); }
 
-  void SetUp() GRPC_OVERRIDE {
+  void SetUp() override {
     poll_overrider_.reset(new PollingOverrider(!GetParam().disable_blocking));
 
     port_ = grpc_pick_unused_port_or_die();
@@ -254,7 +264,8 @@ class AsyncEnd2endTest : public ::testing::TestWithParam<TestScenario> {
 
     // Setup server
     ServerBuilder builder;
-    auto server_creds = GetServerCredentials(GetParam().credentials_type);
+    auto server_creds = GetCredentialsProvider()->GetServerCredentials(
+        GetParam().credentials_type);
     builder.AddListeningPort(server_address_.str(), server_creds);
     builder.RegisterService(&service_);
     cq_ = builder.AddCompletionQueue();
@@ -269,7 +280,7 @@ class AsyncEnd2endTest : public ::testing::TestWithParam<TestScenario> {
     gpr_tls_set(&g_is_async_end2end_test, 1);
   }
 
-  void TearDown() GRPC_OVERRIDE {
+  void TearDown() override {
     server_->Shutdown();
     void* ignored_tag;
     bool ignored_ok;
@@ -283,8 +294,8 @@ class AsyncEnd2endTest : public ::testing::TestWithParam<TestScenario> {
 
   void ResetStub() {
     ChannelArguments args;
-    auto channel_creds =
-        GetChannelCredentials(GetParam().credentials_type, &args);
+    auto channel_creds = GetCredentialsProvider()->GetChannelCredentials(
+        GetParam().credentials_type, &args);
     std::shared_ptr<Channel> channel =
         CreateCustomChannel(server_address_.str(), channel_creds, args);
     stub_ = grpc::testing::EchoTestService::NewStub(channel);
@@ -352,15 +363,13 @@ void ServerWait(Server* server, int* notify) {
 }
 TEST_P(AsyncEnd2endTest, WaitAndShutdownTest) {
   int notify = 0;
-  std::thread* wait_thread =
-      new std::thread(&ServerWait, server_.get(), &notify);
+  std::thread wait_thread(&ServerWait, server_.get(), &notify);
   ResetStub();
   SendRpc(1);
   EXPECT_EQ(0, notify);
   server_->Shutdown();
-  wait_thread->join();
+  wait_thread.join();
   EXPECT_EQ(1, notify);
-  delete wait_thread;
 }
 
 TEST_P(AsyncEnd2endTest, ShutdownThenWait) {
@@ -475,6 +484,81 @@ TEST_P(AsyncEnd2endTest, SimpleClientStreaming) {
   EXPECT_TRUE(recv_status.ok());
 }
 
+// Two pings and a final pong.
+TEST_P(AsyncEnd2endTest, SimpleClientStreamingWithCoalescingApi) {
+  ResetStub();
+
+  EchoRequest send_request;
+  EchoRequest recv_request;
+  EchoResponse send_response;
+  EchoResponse recv_response;
+  Status recv_status;
+  ClientContext cli_ctx;
+  ServerContext srv_ctx;
+  ServerAsyncReader<EchoResponse, EchoRequest> srv_stream(&srv_ctx);
+
+  send_request.set_message(GetParam().message_content);
+  cli_ctx.set_initial_metadata_corked(true);
+  // tag:1 never comes up since no op is performed
+  std::unique_ptr<ClientAsyncWriter<EchoRequest>> cli_stream(
+      stub_->AsyncRequestStream(&cli_ctx, &recv_response, cq_.get(), tag(1)));
+
+  service_.RequestRequestStream(&srv_ctx, &srv_stream, cq_.get(), cq_.get(),
+                                tag(2));
+
+  cli_stream->Write(send_request, tag(3));
+
+  // 65536(64KB) is the default flow control window size. Should change this
+  // number when default flow control window size changes. For the write of
+  // send_request larger than the flow control window size, tag:3 will not come
+  // up until server read is initiated. For write of send_request smaller than
+  // the flow control window size, the request can take the free ride with
+  // initial metadata due to coalescing, thus write tag:3 will come up here.
+  if (GetParam().message_content.length() < 65536) {
+    Verifier(GetParam().disable_blocking)
+        .Expect(2, true)
+        .Expect(3, true)
+        .Verify(cq_.get());
+  } else {
+    Verifier(GetParam().disable_blocking).Expect(2, true).Verify(cq_.get());
+  }
+
+  srv_stream.Read(&recv_request, tag(4));
+
+  if (GetParam().message_content.length() < 65536) {
+    Verifier(GetParam().disable_blocking).Expect(4, true).Verify(cq_.get());
+  } else {
+    Verifier(GetParam().disable_blocking)
+        .Expect(3, true)
+        .Expect(4, true)
+        .Verify(cq_.get());
+  }
+
+  EXPECT_EQ(send_request.message(), recv_request.message());
+
+  cli_stream->WriteLast(send_request, WriteOptions(), tag(5));
+  srv_stream.Read(&recv_request, tag(6));
+  Verifier(GetParam().disable_blocking)
+      .Expect(5, true)
+      .Expect(6, true)
+      .Verify(cq_.get());
+  EXPECT_EQ(send_request.message(), recv_request.message());
+
+  srv_stream.Read(&recv_request, tag(7));
+  Verifier(GetParam().disable_blocking).Expect(7, false).Verify(cq_.get());
+
+  send_response.set_message(recv_request.message());
+  srv_stream.Finish(send_response, Status::OK, tag(8));
+  cli_stream->Finish(&recv_status, tag(9));
+  Verifier(GetParam().disable_blocking)
+      .Expect(8, true)
+      .Expect(9, true)
+      .Verify(cq_.get());
+
+  EXPECT_EQ(send_response.message(), recv_response.message());
+  EXPECT_TRUE(recv_status.ok());
+}
+
 // One ping, two pongs.
 TEST_P(AsyncEnd2endTest, SimpleServerStreaming) {
   ResetStub();
@@ -524,6 +608,112 @@ TEST_P(AsyncEnd2endTest, SimpleServerStreaming) {
       .Expect(7, true)
       .Expect(8, false)
       .Verify(cq_.get());
+
+  cli_stream->Finish(&recv_status, tag(9));
+  Verifier(GetParam().disable_blocking).Expect(9, true).Verify(cq_.get());
+
+  EXPECT_TRUE(recv_status.ok());
+}
+
+// One ping, two pongs. Using WriteAndFinish API
+TEST_P(AsyncEnd2endTest, SimpleServerStreamingWithCoalescingApiWAF) {
+  ResetStub();
+
+  EchoRequest send_request;
+  EchoRequest recv_request;
+  EchoResponse send_response;
+  EchoResponse recv_response;
+  Status recv_status;
+  ClientContext cli_ctx;
+  ServerContext srv_ctx;
+  ServerAsyncWriter<EchoResponse> srv_stream(&srv_ctx);
+
+  send_request.set_message(GetParam().message_content);
+  std::unique_ptr<ClientAsyncReader<EchoResponse>> cli_stream(
+      stub_->AsyncResponseStream(&cli_ctx, send_request, cq_.get(), tag(1)));
+
+  service_.RequestResponseStream(&srv_ctx, &recv_request, &srv_stream,
+                                 cq_.get(), cq_.get(), tag(2));
+
+  Verifier(GetParam().disable_blocking)
+      .Expect(1, true)
+      .Expect(2, true)
+      .Verify(cq_.get());
+  EXPECT_EQ(send_request.message(), recv_request.message());
+
+  send_response.set_message(recv_request.message());
+  srv_stream.Write(send_response, tag(3));
+  cli_stream->Read(&recv_response, tag(4));
+  Verifier(GetParam().disable_blocking)
+      .Expect(3, true)
+      .Expect(4, true)
+      .Verify(cq_.get());
+  EXPECT_EQ(send_response.message(), recv_response.message());
+
+  srv_stream.WriteAndFinish(send_response, WriteOptions(), Status::OK, tag(5));
+  cli_stream->Read(&recv_response, tag(6));
+  Verifier(GetParam().disable_blocking)
+      .Expect(5, true)
+      .Expect(6, true)
+      .Verify(cq_.get());
+  EXPECT_EQ(send_response.message(), recv_response.message());
+
+  cli_stream->Read(&recv_response, tag(7));
+  Verifier(GetParam().disable_blocking).Expect(7, false).Verify(cq_.get());
+
+  cli_stream->Finish(&recv_status, tag(8));
+  Verifier(GetParam().disable_blocking).Expect(8, true).Verify(cq_.get());
+
+  EXPECT_TRUE(recv_status.ok());
+}
+
+// One ping, two pongs. Using WriteLast API
+TEST_P(AsyncEnd2endTest, SimpleServerStreamingWithCoalescingApiWL) {
+  ResetStub();
+
+  EchoRequest send_request;
+  EchoRequest recv_request;
+  EchoResponse send_response;
+  EchoResponse recv_response;
+  Status recv_status;
+  ClientContext cli_ctx;
+  ServerContext srv_ctx;
+  ServerAsyncWriter<EchoResponse> srv_stream(&srv_ctx);
+
+  send_request.set_message(GetParam().message_content);
+  std::unique_ptr<ClientAsyncReader<EchoResponse>> cli_stream(
+      stub_->AsyncResponseStream(&cli_ctx, send_request, cq_.get(), tag(1)));
+
+  service_.RequestResponseStream(&srv_ctx, &recv_request, &srv_stream,
+                                 cq_.get(), cq_.get(), tag(2));
+
+  Verifier(GetParam().disable_blocking)
+      .Expect(1, true)
+      .Expect(2, true)
+      .Verify(cq_.get());
+  EXPECT_EQ(send_request.message(), recv_request.message());
+
+  send_response.set_message(recv_request.message());
+  srv_stream.Write(send_response, tag(3));
+  cli_stream->Read(&recv_response, tag(4));
+  Verifier(GetParam().disable_blocking)
+      .Expect(3, true)
+      .Expect(4, true)
+      .Verify(cq_.get());
+  EXPECT_EQ(send_response.message(), recv_response.message());
+
+  srv_stream.WriteLast(send_response, WriteOptions(), tag(5));
+  cli_stream->Read(&recv_response, tag(6));
+  srv_stream.Finish(Status::OK, tag(7));
+  Verifier(GetParam().disable_blocking)
+      .Expect(5, true)
+      .Expect(6, true)
+      .Expect(7, true)
+      .Verify(cq_.get());
+  EXPECT_EQ(send_response.message(), recv_response.message());
+
+  cli_stream->Read(&recv_response, tag(8));
+  Verifier(GetParam().disable_blocking).Expect(8, false).Verify(cq_.get());
 
   cli_stream->Finish(&recv_status, tag(9));
   Verifier(GetParam().disable_blocking).Expect(9, true).Verify(cq_.get());
@@ -586,6 +776,144 @@ TEST_P(AsyncEnd2endTest, SimpleBidiStreaming) {
       .Expect(9, true)
       .Expect(10, true)
       .Verify(cq_.get());
+
+  EXPECT_TRUE(recv_status.ok());
+}
+
+// One ping, one pong. Using server:WriteAndFinish api
+TEST_P(AsyncEnd2endTest, SimpleBidiStreamingWithCoalescingApiWAF) {
+  ResetStub();
+
+  EchoRequest send_request;
+  EchoRequest recv_request;
+  EchoResponse send_response;
+  EchoResponse recv_response;
+  Status recv_status;
+  ClientContext cli_ctx;
+  ServerContext srv_ctx;
+  ServerAsyncReaderWriter<EchoResponse, EchoRequest> srv_stream(&srv_ctx);
+
+  send_request.set_message(GetParam().message_content);
+  cli_ctx.set_initial_metadata_corked(true);
+  std::unique_ptr<ClientAsyncReaderWriter<EchoRequest, EchoResponse>>
+      cli_stream(stub_->AsyncBidiStream(&cli_ctx, cq_.get(), tag(1)));
+
+  service_.RequestBidiStream(&srv_ctx, &srv_stream, cq_.get(), cq_.get(),
+                             tag(2));
+
+  cli_stream->WriteLast(send_request, WriteOptions(), tag(3));
+
+  // 65536(64KB) is the default flow control window size. Should change this
+  // number when default flow control window size changes. For the write of
+  // send_request larger than the flow control window size, tag:3 will not come
+  // up until server read is initiated. For write of send_request smaller than
+  // the flow control window size, the request can take the free ride with
+  // initial metadata due to coalescing, thus write tag:3 will come up here.
+  if (GetParam().message_content.length() < 65536) {
+    Verifier(GetParam().disable_blocking)
+        .Expect(2, true)
+        .Expect(3, true)
+        .Verify(cq_.get());
+  } else {
+    Verifier(GetParam().disable_blocking).Expect(2, true).Verify(cq_.get());
+  }
+
+  srv_stream.Read(&recv_request, tag(4));
+
+  if (GetParam().message_content.length() < 65536) {
+    Verifier(GetParam().disable_blocking).Expect(4, true).Verify(cq_.get());
+  } else {
+    Verifier(GetParam().disable_blocking)
+        .Expect(3, true)
+        .Expect(4, true)
+        .Verify(cq_.get());
+  }
+  EXPECT_EQ(send_request.message(), recv_request.message());
+
+  srv_stream.Read(&recv_request, tag(5));
+  Verifier(GetParam().disable_blocking).Expect(5, false).Verify(cq_.get());
+
+  send_response.set_message(recv_request.message());
+  srv_stream.WriteAndFinish(send_response, WriteOptions(), Status::OK, tag(6));
+  cli_stream->Read(&recv_response, tag(7));
+  Verifier(GetParam().disable_blocking)
+      .Expect(6, true)
+      .Expect(7, true)
+      .Verify(cq_.get());
+  EXPECT_EQ(send_response.message(), recv_response.message());
+
+  cli_stream->Finish(&recv_status, tag(8));
+  Verifier(GetParam().disable_blocking).Expect(8, true).Verify(cq_.get());
+
+  EXPECT_TRUE(recv_status.ok());
+}
+
+// One ping, one pong. Using server:WriteLast api
+TEST_P(AsyncEnd2endTest, SimpleBidiStreamingWithCoalescingApiWL) {
+  ResetStub();
+
+  EchoRequest send_request;
+  EchoRequest recv_request;
+  EchoResponse send_response;
+  EchoResponse recv_response;
+  Status recv_status;
+  ClientContext cli_ctx;
+  ServerContext srv_ctx;
+  ServerAsyncReaderWriter<EchoResponse, EchoRequest> srv_stream(&srv_ctx);
+
+  send_request.set_message(GetParam().message_content);
+  cli_ctx.set_initial_metadata_corked(true);
+  std::unique_ptr<ClientAsyncReaderWriter<EchoRequest, EchoResponse>>
+      cli_stream(stub_->AsyncBidiStream(&cli_ctx, cq_.get(), tag(1)));
+
+  service_.RequestBidiStream(&srv_ctx, &srv_stream, cq_.get(), cq_.get(),
+                             tag(2));
+
+  cli_stream->WriteLast(send_request, WriteOptions(), tag(3));
+
+  // 65536(64KB) is the default flow control window size. Should change this
+  // number when default flow control window size changes. For the write of
+  // send_request larger than the flow control window size, tag:3 will not come
+  // up until server read is initiated. For write of send_request smaller than
+  // the flow control window size, the request can take the free ride with
+  // initial metadata due to coalescing, thus write tag:3 will come up here.
+  if (GetParam().message_content.length() < 65536) {
+    Verifier(GetParam().disable_blocking)
+        .Expect(2, true)
+        .Expect(3, true)
+        .Verify(cq_.get());
+  } else {
+    Verifier(GetParam().disable_blocking).Expect(2, true).Verify(cq_.get());
+  }
+
+  srv_stream.Read(&recv_request, tag(4));
+
+  if (GetParam().message_content.length() < 65536) {
+    Verifier(GetParam().disable_blocking).Expect(4, true).Verify(cq_.get());
+  } else {
+    Verifier(GetParam().disable_blocking)
+        .Expect(3, true)
+        .Expect(4, true)
+        .Verify(cq_.get());
+  }
+  EXPECT_EQ(send_request.message(), recv_request.message());
+
+  srv_stream.Read(&recv_request, tag(5));
+  Verifier(GetParam().disable_blocking).Expect(5, false).Verify(cq_.get());
+
+  send_response.set_message(recv_request.message());
+  srv_stream.WriteLast(send_response, WriteOptions(), tag(6));
+  srv_stream.Finish(Status::OK, tag(7));
+  cli_stream->Read(&recv_response, tag(8));
+  Verifier(GetParam().disable_blocking)
+      .Expect(6, true)
+      .Expect(7, true)
+      .Expect(8, true)
+      .Verify(cq_.get());
+  EXPECT_EQ(send_response.message(), recv_response.message());
+
+  cli_stream->Finish(&recv_status, tag(9));
+  Verifier(GetParam().disable_blocking).Expect(9, true).Verify(cq_.get());
 
   EXPECT_TRUE(recv_status.ok());
 }
@@ -894,8 +1222,8 @@ TEST_P(AsyncEnd2endTest, ServerCheckDone) {
 
 TEST_P(AsyncEnd2endTest, UnimplementedRpc) {
   ChannelArguments args;
-  auto channel_creds =
-      GetChannelCredentials(GetParam().credentials_type, &args);
+  auto channel_creds = GetCredentialsProvider()->GetChannelCredentials(
+      GetParam().credentials_type, &args);
   std::shared_ptr<Channel> channel =
       CreateCustomChannel(server_address_.str(), channel_creds, args);
   std::unique_ptr<grpc::testing::UnimplementedEchoService::Stub> stub;
@@ -991,7 +1319,7 @@ class AsyncEnd2endServerTryCancelTest : public AsyncEnd2endTest {
       expected_server_cq_result = false;
     }
 
-    std::thread* server_try_cancel_thd = NULL;
+    std::thread* server_try_cancel_thd = nullptr;
 
     auto verif = Verifier(GetParam().disable_blocking);
 
@@ -1027,7 +1355,7 @@ class AsyncEnd2endServerTryCancelTest : public AsyncEnd2endTest {
       }
     }
 
-    if (server_try_cancel_thd != NULL) {
+    if (server_try_cancel_thd != nullptr) {
       server_try_cancel_thd->join();
       delete server_try_cancel_thd;
     }
@@ -1112,7 +1440,7 @@ class AsyncEnd2endServerTryCancelTest : public AsyncEnd2endTest {
       expected_cq_result = false;
     }
 
-    std::thread* server_try_cancel_thd = NULL;
+    std::thread* server_try_cancel_thd = nullptr;
 
     auto verif = Verifier(GetParam().disable_blocking);
 
@@ -1150,7 +1478,7 @@ class AsyncEnd2endServerTryCancelTest : public AsyncEnd2endTest {
       }
     }
 
-    if (server_try_cancel_thd != NULL) {
+    if (server_try_cancel_thd != nullptr) {
       server_try_cancel_thd->join();
       delete server_try_cancel_thd;
     }
@@ -1252,7 +1580,7 @@ class AsyncEnd2endServerTryCancelTest : public AsyncEnd2endTest {
       expected_cq_result = false;
     }
 
-    std::thread* server_try_cancel_thd = NULL;
+    std::thread* server_try_cancel_thd = nullptr;
 
     auto verif = Verifier(GetParam().disable_blocking);
 
@@ -1332,7 +1660,7 @@ class AsyncEnd2endServerTryCancelTest : public AsyncEnd2endTest {
       EXPECT_EQ(verif.Next(cq_.get(), ignore_cq_result), 8);
     }
 
-    if (server_try_cancel_thd != NULL) {
+    if (server_try_cancel_thd != nullptr) {
       server_try_cancel_thd->join();
       delete server_try_cancel_thd;
     }
@@ -1406,11 +1734,15 @@ std::vector<TestScenario> CreateTestScenarios(bool test_disable_blocking,
   std::vector<grpc::string> credentials_types;
   std::vector<grpc::string> messages;
 
-  credentials_types.push_back(kInsecureCredentialsType);
-  auto sec_list = GetSecureCredentialsTypeList();
+  if (GetCredentialsProvider()->GetChannelCredentials(kInsecureCredentialsType,
+                                                      nullptr) != nullptr) {
+    credentials_types.push_back(kInsecureCredentialsType);
+  }
+  auto sec_list = GetCredentialsProvider()->GetSecureCredentialsTypeList();
   for (auto sec = sec_list.begin(); sec != sec_list.end(); sec++) {
     credentials_types.push_back(*sec);
   }
+  GPR_ASSERT(!credentials_types.empty());
 
   messages.push_back("Hello");
   for (int sz = 1; sz < test_big_limit; sz *= 2) {

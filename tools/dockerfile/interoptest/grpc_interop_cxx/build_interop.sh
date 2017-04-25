@@ -32,7 +32,11 @@
 set -e
 
 mkdir -p /var/local/git
-git clone --recursive /var/local/jenkins/grpc /var/local/git/grpc
+git clone /var/local/jenkins/grpc /var/local/git/grpc
+# clone gRPC submodules, use data from locally cloned submodules where possible
+(cd /var/local/jenkins/grpc/ && git submodule foreach 'cd /var/local/git/grpc \
+&& git submodule update --init --reference /var/local/jenkins/grpc/${name} \
+${name}')
 
 # copy service account keys if available
 cp -r /var/local/jenkins/service_account $HOME || true
@@ -43,3 +47,6 @@ make install-certs
 
 # build C++ interop client & server
 make interop_client interop_server
+
+# build C++ http2 client
+make http2_client

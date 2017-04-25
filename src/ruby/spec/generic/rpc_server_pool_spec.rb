@@ -52,28 +52,31 @@ describe GRPC::Pool do
       expect(p.ready_for_work?).to be(false)
     end
 
-    it 'it stops being ready after all workers jobs waiting or running' do
+    it 'it stops being ready after all workers are busy' do
       p = Pool.new(5)
       p.start
-      job = proc { sleep(3) } # sleep so workers busy when done scheduling
-      5.times do
-        expect(p.ready_for_work?).to be(true)
-        p.schedule(&job)
-      end
-      expect(p.ready_for_work?).to be(false)
-    end
 
-    it 'it becomes ready again after jobs complete' do
-      p = Pool.new(5)
-      p.start
-      job = proc {}
+      wait_mu = Mutex.new
+      wait_cv = ConditionVariable.new
+      wait = true
+
+      job = proc do
+        wait_mu.synchronize do
+          wait_cv.wait(wait_mu) while wait
+        end
+      end
+
       5.times do
         expect(p.ready_for_work?).to be(true)
         p.schedule(&job)
       end
+
       expect(p.ready_for_work?).to be(false)
-      sleep 5 # give the pool time do get at least one task done
-      expect(p.ready_for_work?).to be(true)
+
+      wait_mu.synchronize do
+        wait = false
+        wait_cv.broadcast
+      end
     end
   end
 
@@ -94,18 +97,6 @@ describe GRPC::Pool do
       expect(q.pop).to be(o)
       p.stop
     end
-
-    it 'it throws an error if all of the workers have tasks to do' do
-      p = Pool.new(5)
-      p.start
-      job = proc {}
-      5.times do
-        expect(p.ready_for_work?).to be(true)
-        p.schedule(&job)
-      end
-      expect { p.schedule(&job) }.to raise_error
-      expect { p.schedule(&job) }.to raise_error
-    end
   end
 
   describe '#stop' do
@@ -117,13 +108,20 @@ describe GRPC::Pool do
     it 'stops jobs when there are long running jobs' do
       p = Pool.new(1)
       p.start
-      o, q = Object.new, Queue.new
+
+      wait_forever_mu = Mutex.new
+      wait_forever_cv = ConditionVariable.new
+      wait_forever = true
+
+      job_running = Queue.new
       job = proc do
-        sleep(5)  # long running
-        q.push(o)
+        job_running.push(Object.new)
+        wait_forever_mu.synchronize do
+          wait_forever_cv.wait while wait_forever
+        end
       end
       p.schedule(&job)
-      sleep(1)  # should ensure the long job gets scheduled
+      job_running.pop
       expect { p.stop }.not_to raise_error
     end
   end

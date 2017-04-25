@@ -1,4 +1,4 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python
 # Copyright 2016, Google Inc.
 # All rights reserved.
 #
@@ -30,15 +30,16 @@
 
 """Runs selected gRPC test/build tasks."""
 
+from __future__ import print_function
+
 import argparse
-import atexit
-import jobset
 import multiprocessing
 import sys
 
-import artifact_targets
-import distribtest_targets
-import package_targets
+import artifacts.artifact_targets as artifact_targets
+import artifacts.distribtest_targets as distribtest_targets
+import artifacts.package_targets as package_targets
+import python_utils.jobset as jobset
 
 _TARGETS = []
 _TARGETS += artifact_targets.targets()
@@ -111,7 +112,7 @@ build_jobs = []
 for target in targets:
   build_jobs.append(target.build_jobspec())
 if not build_jobs:
-  print 'Nothing to build.'
+  print('Nothing to build.')
   sys.exit(1)
 
 jobset.message('START', 'Building targets.', do_newline=True)

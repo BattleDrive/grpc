@@ -39,13 +39,16 @@
 #include <grpc/support/time.h>
 #include "src/core/lib/security/credentials/credentials.h"
 #include "src/core/lib/security/credentials/fake/fake_credentials.h"
-#include "src/core/lib/tsi/fake_transport_security.h"
+#include "src/core/tsi/fake_transport_security.h"
 #include "test/core/util/port.h"
 #include "test/core/util/test_config.h"
 
 void test_unparsable_target(void) {
-  int port = grpc_server_add_insecure_http2_port(NULL, "[");
+  grpc_channel_args args = {0, NULL};
+  grpc_server *server = grpc_server_create(&args, NULL);
+  int port = grpc_server_add_insecure_http2_port(server, "[");
   GPR_ASSERT(port == 0);
+  grpc_server_destroy(server);
 }
 
 void test_add_same_port_twice() {

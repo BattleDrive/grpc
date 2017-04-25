@@ -40,11 +40,13 @@
 
 #include <vector>
 #include "call.h"
+#include "completion_queue.h"
 #include "completion_queue_async_worker.h"
 #include "grpc/grpc.h"
 #include "grpc/grpc_security.h"
 #include "grpc/support/log.h"
 #include "server_credentials.h"
+#include "slice.h"
 #include "timeval.h"
 
 namespace grpc {
@@ -64,6 +66,7 @@ using v8::Array;
 using v8::Boolean;
 using v8::Date;
 using v8::Exception;
+using v8::External;
 using v8::Function;
 using v8::FunctionTemplate;
 using v8::Local;
@@ -95,10 +98,11 @@ class NewCallOp : public Op {
     }
     Local<Object> obj = Nan::New<Object>();
     Nan::Set(obj, Nan::New("call").ToLocalChecked(), Call::WrapStruct(call));
+    // TODO(murgatroid99): Use zero-copy string construction instead
     Nan::Set(obj, Nan::New("method").ToLocalChecked(),
-             Nan::New(details.method).ToLocalChecked());
+             CopyStringFromSlice(details.method));
     Nan::Set(obj, Nan::New("host").ToLocalChecked(),
-             Nan::New(details.host).ToLocalChecked());
+             CopyStringFromSlice(details.host));
     Nan::Set(obj, Nan::New("deadline").ToLocalChecked(),
              Nan::New<Date>(TimespecToMilliseconds(details.deadline))
                  .ToLocalChecked());
@@ -107,9 +111,13 @@ class NewCallOp : public Op {
     return scope.Escape(obj);
   }
 
-  bool ParseOp(Local<Value> value, grpc_op *out,
-               shared_ptr<Resources> resources) {
+  bool ParseOp(Local<Value> value, grpc_op *out) {
     return true;
+  }
+  bool IsFinalOp() {
+    return false;
+  }
+  void OnComplete(bool success) {
   }
 
   grpc_call *call;
@@ -120,18 +128,33 @@ class NewCallOp : public Op {
   std::string GetTypeString() const { return "new_call"; }
 };
 
-Server::Server(grpc_server *server) : wrapped_server(server) {
-  shutdown_queue = grpc_completion_queue_create(NULL);
-  grpc_server_register_non_listening_completion_queue(server, shutdown_queue,
-                                                      NULL);
-}
-
-Server::~Server() {
-  this->ShutdownServer();
-  grpc_completion_queue_shutdown(this->shutdown_queue);
-  grpc_server_destroy(this->wrapped_server);
-  grpc_completion_queue_destroy(this->shutdown_queue);
-}
+class TryShutdownOp: public Op {
+ public:
+  TryShutdownOp(Server *server, Local<Value> server_value) : server(server) {
+    server_persist.Reset(server_value);
+  }
+  Local<Value> GetNodeValue() const {
+    EscapableHandleScope scope;
+    return scope.Escape(Nan::New(server_persist));
+  }
+  bool ParseOp(Local<Value> value, grpc_op *out) {
+    return true;
+  }
+  bool IsFinalOp() {
+    return false;
+  }
+  void OnComplete(bool success) {
+    if (success) {
+      server->DestroyWrappedServer();
+    }
+  }
+ protected:
+  std::string GetTypeString() const { return "try_shutdown"; }
+ private:
+  Server *server;
+  Nan::Persistent<v8::Value, Nan::CopyablePersistentTraits<v8::Value>>
+      server_persist;
+};
 
 void Server::Init(Local<Object> exports) {
   HandleScope scope;
@@ -154,12 +177,11 @@ bool Server::HasInstance(Local<Value> val) {
   return Nan::New(fun_tpl)->HasInstance(val);
 }
 
-void Server::ShutdownServer() {
-  grpc_server_shutdown_and_notify(this->wrapped_server, this->shutdown_queue,
-                                  NULL);
-  grpc_server_cancel_all_calls(this->wrapped_server);
-  grpc_completion_queue_pluck(this->shutdown_queue, NULL,
-                              gpr_inf_future(GPR_CLOCK_REALTIME), NULL);
+void Server::DestroyWrappedServer() {
+  if (this->wrapped_server != NULL) {
+    grpc_server_destroy(this->wrapped_server);
+    this->wrapped_server = NULL;
+  }
 }
 
 NAN_METHOD(Server::New) {
@@ -179,7 +201,7 @@ NAN_METHOD(Server::New) {
     }
   }
   grpc_server *wrapped_server;
-  grpc_completion_queue *queue = CompletionQueueAsyncWorker::GetQueue();
+  grpc_completion_queue *queue = GetCompletionQueue();
   grpc_channel_args *channel_args;
   if (!ParseChannelArgs(info[0], &channel_args)) {
     DeallocateChannelArgs(channel_args);
@@ -205,14 +227,14 @@ NAN_METHOD(Server::RequestCall) {
   ops->push_back(unique_ptr<Op>(op));
   grpc_call_error error = grpc_server_request_call(
       server->wrapped_server, &op->call, &op->details, &op->request_metadata,
-      CompletionQueueAsyncWorker::GetQueue(),
-      CompletionQueueAsyncWorker::GetQueue(),
+      GetCompletionQueue(),
+      GetCompletionQueue(),
       new struct tag(new Callback(info[0].As<Function>()), ops.release(),
-                     shared_ptr<Resources>(nullptr)));
+                     NULL, Nan::Null()));
   if (error != GRPC_CALL_OK) {
     return Nan::ThrowError(nanErrorWithCode("requestCall failed", error));
   }
-  CompletionQueueAsyncWorker::Next();
+  CompletionQueueNext();
 }
 
 NAN_METHOD(Server::AddHttp2Port) {
@@ -257,12 +279,20 @@ NAN_METHOD(Server::TryShutdown) {
     return Nan::ThrowTypeError("tryShutdown can only be called on a Server");
   }
   Server *server = ObjectWrap::Unwrap<Server>(info.This());
+  if (server->wrapped_server == NULL) {
+    // Server is already shut down. Call callback immediately.
+    Nan::Callback callback(info[0].As<Function>());
+    callback.Call(0, {});
+    return;
+  }
+  TryShutdownOp *op = new TryShutdownOp(server, info.This());
   unique_ptr<OpVec> ops(new OpVec());
+  ops->push_back(unique_ptr<Op>(op));
   grpc_server_shutdown_and_notify(
-      server->wrapped_server, CompletionQueueAsyncWorker::GetQueue(),
+      server->wrapped_server, GetCompletionQueue(),
       new struct tag(new Nan::Callback(info[0].As<Function>()), ops.release(),
-                     shared_ptr<Resources>(nullptr)));
-  CompletionQueueAsyncWorker::Next();
+                     NULL, Nan::Null()));
+  CompletionQueueNext();
 }
 
 NAN_METHOD(Server::ForceShutdown) {

@@ -40,138 +40,8 @@
 #include "src/compiler/config.h"
 
 #include "src/compiler/cpp_generator.h"
-#include "src/compiler/cpp_generator_helpers.h"
 #include "src/compiler/generator_helpers.h"
-
-using grpc_cpp_generator::GetCppComments;
-
-class ProtoBufMethod : public grpc_cpp_generator::Method {
- public:
-  ProtoBufMethod(const grpc::protobuf::MethodDescriptor *method)
-    : method_(method) {}
-
-  grpc::string name() const { return method_->name(); }
-
-  grpc::string input_type_name() const {
-    return grpc_cpp_generator::ClassName(method_->input_type(), true);
-  }
-  grpc::string output_type_name() const {
-    return grpc_cpp_generator::ClassName(method_->output_type(), true);
-  }
-
-  bool NoStreaming() const {
-    return !method_->client_streaming() && !method_->server_streaming();
-  }
-
-  bool ClientOnlyStreaming() const {
-    return method_->client_streaming() && !method_->server_streaming();
-  }
-
-  bool ServerOnlyStreaming() const {
-    return !method_->client_streaming() && method_->server_streaming();
-  }
-
-  bool BidiStreaming() const {
-    return method_->client_streaming() && method_->server_streaming();
-  }
-
-  grpc::string GetLeadingComments() const {
-    return GetCppComments(method_, true);
-  }
-
-  grpc::string GetTrailingComments() const {
-    return GetCppComments(method_, false);
-  }
-
- private:
-  const grpc::protobuf::MethodDescriptor *method_;
-};
-
-class ProtoBufService : public grpc_cpp_generator::Service {
- public:
-  ProtoBufService(const grpc::protobuf::ServiceDescriptor *service)
-    : service_(service) {}
-
-  grpc::string name() const { return service_->name(); }
-
-  int method_count() const { return service_->method_count(); };
-  std::unique_ptr<const grpc_cpp_generator::Method> method(int i) const {
-    return std::unique_ptr<const grpc_cpp_generator::Method>(
-          new ProtoBufMethod(service_->method(i)));
-  };
-
-  grpc::string GetLeadingComments() const {
-    return GetCppComments(service_, true);
-  }
-
-  grpc::string GetTrailingComments() const {
-    return GetCppComments(service_, false);
-  }
-
- private:
-  const grpc::protobuf::ServiceDescriptor *service_;
-};
-
-class ProtoBufPrinter : public grpc_cpp_generator::Printer {
- public:
-  ProtoBufPrinter(grpc::string *str)
-    : output_stream_(str), printer_(&output_stream_, '$') {}
-
-  void Print(const std::map<grpc::string, grpc::string> &vars,
-             const char *string_template) {
-    printer_.Print(vars, string_template);
-  }
-
-  void Print(const char *string) { printer_.Print(string); }
-  void Indent() { printer_.Indent(); }
-  void Outdent() { printer_.Outdent(); }
-
- private:
-  grpc::protobuf::io::StringOutputStream output_stream_;
-  grpc::protobuf::io::Printer printer_;
-};
-
-class ProtoBufFile : public grpc_cpp_generator::File {
- public:
-  ProtoBufFile(const grpc::protobuf::FileDescriptor *file) : file_(file) {}
-
-  grpc::string filename() const { return file_->name(); }
-  grpc::string filename_without_ext() const {
-    return grpc_generator::StripProto(filename());
-  }
-
-  grpc::string message_header_ext() const { return ".pb.h"; }
-  grpc::string service_header_ext() const { return ".grpc.pb.h"; }
-
-  grpc::string package() const { return file_->package(); }
-  std::vector<grpc::string> package_parts() const {
-    return grpc_generator::tokenize(package(), ".");
-  }
-
-  grpc::string additional_headers() const { return ""; }
-
-  int service_count() const { return file_->service_count(); };
-  std::unique_ptr<const grpc_cpp_generator::Service> service(int i) const {
-    return std::unique_ptr<const grpc_cpp_generator::Service> (
-          new ProtoBufService(file_->service(i)));
-  }
-
-  std::unique_ptr<grpc_cpp_generator::Printer> CreatePrinter(grpc::string *str) const {
-    return std::unique_ptr<grpc_cpp_generator::Printer>(
-          new ProtoBufPrinter(str));
-  }
-
-  grpc::string GetLeadingComments() const {
-    return GetCppComments(file_, true);
-  }
-
-  grpc::string GetTrailingComments() const {
-    return GetCppComments(file_, false);
-  }
-
- private:
-  const grpc::protobuf::FileDescriptor *file_;
-};
+#include "src/compiler/protobuf_plugin.h"
 
 class CppGrpcGenerator : public grpc::protobuf::compiler::CodeGenerator {
  public:
@@ -197,12 +67,11 @@ class CppGrpcGenerator : public grpc::protobuf::compiler::CodeGenerator {
 
     if (!parameter.empty()) {
       std::vector<grpc::string> parameters_list =
-        grpc_generator::tokenize(parameter, ",");
+          grpc_generator::tokenize(parameter, ",");
       for (auto parameter_string = parameters_list.begin();
-           parameter_string != parameters_list.end();
-           parameter_string++) {
+           parameter_string != parameters_list.end(); parameter_string++) {
         std::vector<grpc::string> param =
-          grpc_generator::tokenize(*parameter_string, "=");
+            grpc_generator::tokenize(*parameter_string, "=");
         if (param[0] == "services_namespace") {
           generator_parameters.services_namespace = param[1];
         } else if (param[0] == "use_system_headers") {
@@ -232,8 +101,7 @@ class CppGrpcGenerator : public grpc::protobuf::compiler::CodeGenerator {
         grpc_cpp_generator::GetHeaderEpilogue(&pbfile, generator_parameters);
     std::unique_ptr<grpc::protobuf::io::ZeroCopyOutputStream> header_output(
         context->Open(file_name + ".grpc.pb.h"));
-    grpc::protobuf::io::CodedOutputStream header_coded_out(
-        header_output.get());
+    grpc::protobuf::io::CodedOutputStream header_coded_out(header_output.get());
     header_coded_out.WriteRaw(header_code.data(), header_code.size());
 
     grpc::string source_code =
@@ -243,8 +111,7 @@ class CppGrpcGenerator : public grpc::protobuf::compiler::CodeGenerator {
         grpc_cpp_generator::GetSourceEpilogue(&pbfile, generator_parameters);
     std::unique_ptr<grpc::protobuf::io::ZeroCopyOutputStream> source_output(
         context->Open(file_name + ".grpc.pb.cc"));
-    grpc::protobuf::io::CodedOutputStream source_coded_out(
-        source_output.get());
+    grpc::protobuf::io::CodedOutputStream source_coded_out(source_output.get());
     source_coded_out.WriteRaw(source_code.data(), source_code.size());
 
     return true;

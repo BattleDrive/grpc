@@ -37,6 +37,7 @@
 #include <utility>
 
 #include "src/compiler/config.h"
+#include "src/compiler/schema_interface.h"
 
 namespace grpc_python_generator {
 
@@ -45,7 +46,10 @@ namespace grpc_python_generator {
 struct GeneratorConfiguration {
   GeneratorConfiguration();
   grpc::string grpc_package_root;
+  // TODO(https://github.com/grpc/grpc/issues/8622): Drop this.
   grpc::string beta_package_root;
+  // TODO(https://github.com/google/protobuf/issues/888): Drop this.
+  grpc::string import_prefix;
 };
 
 class PythonGrpcGenerator : public grpc::protobuf::compiler::CodeGenerator {
@@ -57,13 +61,10 @@ class PythonGrpcGenerator : public grpc::protobuf::compiler::CodeGenerator {
                 const grpc::string& parameter,
                 grpc::protobuf::compiler::GeneratorContext* context,
                 grpc::string* error) const;
+
  private:
   GeneratorConfiguration config_;
 };
-
-std::pair<bool, grpc::string> GetServices(
-    const grpc::protobuf::FileDescriptor* file,
-    const GeneratorConfiguration& config);
 
 }  // namespace grpc_python_generator
 

@@ -56,7 +56,8 @@ namespace Grpc.IntegrationTesting
         [SetUp]
         public void Init()
         {
-            server = new Server
+            // Disable SO_REUSEPORT to prevent https://github.com/grpc/grpc/issues/10755
+            server = new Server(new[] { new ChannelOption(ChannelOptions.SoReuseport, 0) })
             {
                 Services = { TestService.BindService(new FakeTestService()) },
                 Ports = { { Host, ServerPort.PickUnused, TestCredentials.CreateSslServerCredentials() } }
@@ -101,6 +102,34 @@ namespace Grpc.IntegrationTesting
 
             var callCredentials = CallCredentials.FromInterceptor(asyncAuthInterceptor);
             client.UnaryCall(new SimpleRequest { }, new CallOptions(credentials: callCredentials));
+        }
+
+        [Test]
+        public void MetadataCredentials_InterceptorLeavesMetadataEmpty()
+        {
+            var channelCredentials = ChannelCredentials.Create(TestCredentials.CreateSslCredentials(),
+                CallCredentials.FromInterceptor(new AsyncAuthInterceptor((context, metadata) => TaskUtils.CompletedTask)));
+            channel = new Channel(Host, server.Ports.Single().BoundPort, channelCredentials, options);
+            client = new TestService.TestServiceClient(channel);
+
+            var ex = Assert.Throws<RpcException>(() => client.UnaryCall(new SimpleRequest { }));
+            // StatusCode.Unknown as the server-side handler throws an exception after not receiving the authorization header.
+            Assert.AreEqual(StatusCode.Unknown, ex.Status.StatusCode);
+        }
+
+        [Test]
+        public void MetadataCredentials_InterceptorThrows()
+        {
+            var callCredentials = CallCredentials.FromInterceptor(new AsyncAuthInterceptor((context, metadata) =>
+            {
+                throw new Exception("Auth interceptor throws");
+            }));
+            var channelCredentials = ChannelCredentials.Create(TestCredentials.CreateSslCredentials(), callCredentials);
+            channel = new Channel(Host, server.Ports.Single().BoundPort, channelCredentials, options);
+            client = new TestService.TestServiceClient(channel);
+
+            var ex = Assert.Throws<RpcException>(() => client.UnaryCall(new SimpleRequest { }));
+            Assert.AreEqual(StatusCode.Unauthenticated, ex.Status.StatusCode);
         }
 
         private class FakeTestService : TestService.TestServiceBase

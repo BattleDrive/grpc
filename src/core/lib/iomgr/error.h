@@ -37,30 +37,18 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <grpc/slice.h>
+#include <grpc/status.h>
 #include <grpc/support/time.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /// Opaque representation of an error.
-/// Errors are refcounted objects that represent the result of an operation.
-/// Ownership laws:
-///  if a grpc_error is returned by a function, the caller owns a ref to that
-///    instance
-///  if a grpc_error is passed to a grpc_closure callback function (functions
-///    with the signature:
-///      void (*f)(grpc_exec_ctx *exec_ctx, void *arg, grpc_error *error))
-///    then those functions do not automatically own a ref to error
-///  if a grpc_error is passed to *ANY OTHER FUNCTION* then that function takes
-///    ownership of the error
-/// Errors have:
-///  a set of ints, strings, and timestamps that describe the error
-///  always present are:
-///    GRPC_ERROR_STR_FILE, GRPC_ERROR_INT_FILE_LINE - source location the error
-///      was generated
-///    GRPC_ERROR_STR_DESCRIPTION - a human readable description of the error
-///    GRPC_ERROR_TIME_CREATED - a timestamp indicating when the error happened
-///  an error can also have children; these are other errors that are believed
-///    to have contributed to this one. By accumulating children, we can begin
-///    to root cause high level failures from low level failures, without having
-///    to derive execution paths from log lines
+/// See https://github.com/grpc/grpc/blob/master/doc/core/grpc-error.md for a
+/// full write up of this object.
+
 typedef struct grpc_error grpc_error;
 
 typedef enum {
@@ -94,6 +82,11 @@ typedef enum {
   GRPC_ERROR_INT_HTTP_STATUS,
   /// context sensitive limit associated with the error
   GRPC_ERROR_INT_LIMIT,
+  /// chttp2: did the error occur while a write was in progress
+  GRPC_ERROR_INT_OCCURRED_DURING_WRITE,
+
+  /// Must always be last
+  GRPC_ERROR_INT_MAX,
 } grpc_error_ints;
 
 typedef enum {
@@ -115,22 +108,37 @@ typedef enum {
   GRPC_ERROR_STR_TSI_ERROR,
   /// filename that we were trying to read/write when this error occurred
   GRPC_ERROR_STR_FILENAME,
+  /// which data was queued for writing when the error occurred
+  GRPC_ERROR_STR_QUEUED_BUFFERS,
+  /// key associated with the error
+  GRPC_ERROR_STR_KEY,
+  /// value associated with the error
+  GRPC_ERROR_STR_VALUE,
+
+  /// Must always be last
+  GRPC_ERROR_STR_MAX,
 } grpc_error_strs;
 
 typedef enum {
   /// timestamp of error creation
   GRPC_ERROR_TIME_CREATED,
+
+  /// Must always be last
+  GRPC_ERROR_TIME_MAX,
 } grpc_error_times;
 
+/// The following "special" errors can be propagated without allocating memory.
+/// They are always even so that other code (particularly combiner locks,
+/// polling engines) can safely use the lower bit for themselves.
+
 #define GRPC_ERROR_NONE ((grpc_error *)NULL)
-#define GRPC_ERROR_OOM ((grpc_error *)1)
-#define GRPC_ERROR_CANCELLED ((grpc_error *)2)
+#define GRPC_ERROR_OOM ((grpc_error *)2)
+#define GRPC_ERROR_CANCELLED ((grpc_error *)4)
 
 const char *grpc_error_string(grpc_error *error);
-void grpc_error_free_string(const char *str);
 
 /// Create an error - but use GRPC_ERROR_CREATE instead
-grpc_error *grpc_error_create(const char *file, int line, const char *desc,
+grpc_error *grpc_error_create(grpc_slice file, int line, grpc_slice desc,
                               grpc_error **referencing, size_t num_referencing);
 /// Create an error (this is the preferred way of generating an error that is
 ///   not due to a system call - for system calls, use GRPC_OS_ERROR or
@@ -140,13 +148,21 @@ grpc_error *grpc_error_create(const char *file, int line, const char *desc,
 /// err = grpc_error_create(x, y, z, r, nr) is equivalent to:
 ///   err = grpc_error_create(x, y, z, NULL, 0);
 ///   for (i=0; i<nr; i++) err = grpc_error_add_child(err, r[i]);
-#define GRPC_ERROR_CREATE(desc) \
-  grpc_error_create(__FILE__, __LINE__, desc, NULL, 0)
+#define GRPC_ERROR_CREATE_FROM_STATIC_STRING(desc)                     \
+  grpc_error_create(grpc_slice_from_static_string(__FILE__), __LINE__, \
+                    grpc_slice_from_static_string(desc), NULL, 0)
+#define GRPC_ERROR_CREATE_FROM_COPIED_STRING(desc)                     \
+  grpc_error_create(grpc_slice_from_static_string(__FILE__), __LINE__, \
+                    grpc_slice_from_copied_string(desc), NULL, 0)
 
 // Create an error that references some other errors. This function adds a
 // reference to each error in errs - it does not consume an existing reference
-#define GRPC_ERROR_CREATE_REFERENCING(desc, errs, count) \
-  grpc_error_create(__FILE__, __LINE__, desc, errs, count)
+#define GRPC_ERROR_CREATE_REFERENCING_FROM_STATIC_STRING(desc, errs, count) \
+  grpc_error_create(grpc_slice_from_static_string(__FILE__), __LINE__,      \
+                    grpc_slice_from_static_string(desc), errs, count)
+#define GRPC_ERROR_CREATE_REFERENCING_FROM_COPIED_STRING(desc, errs, count) \
+  grpc_error_create(grpc_slice_from_static_string(__FILE__), __LINE__,      \
+                    grpc_slice_from_copied_string(desc), errs, count)
 
 //#define GRPC_ERROR_REFCOUNT_DEBUG
 #ifdef GRPC_ERROR_REFCOUNT_DEBUG
@@ -167,11 +183,13 @@ void grpc_error_unref(grpc_error *err);
 grpc_error *grpc_error_set_int(grpc_error *src, grpc_error_ints which,
                                intptr_t value) GRPC_MUST_USE_RESULT;
 bool grpc_error_get_int(grpc_error *error, grpc_error_ints which, intptr_t *p);
-grpc_error *grpc_error_set_time(grpc_error *src, grpc_error_times which,
-                                gpr_timespec value) GRPC_MUST_USE_RESULT;
 grpc_error *grpc_error_set_str(grpc_error *src, grpc_error_strs which,
-                               const char *value) GRPC_MUST_USE_RESULT;
-const char *grpc_error_get_str(grpc_error *error, grpc_error_strs which);
+                               grpc_slice str) GRPC_MUST_USE_RESULT;
+/// Returns false if the specified string is not set.
+/// Caller does NOT own the slice.
+bool grpc_error_get_str(grpc_error *error, grpc_error_strs which,
+                        grpc_slice *s);
+
 /// Add a child error: an error that is believed to have contributed to this
 /// error occurring. Allows root causing high level errors from lower level
 /// errors that contributed to them.
@@ -192,5 +210,9 @@ bool grpc_log_if_error(const char *what, grpc_error *error, const char *file,
                        int line);
 #define GRPC_LOG_IF_ERROR(what, error) \
   grpc_log_if_error((what), (error), __FILE__, __LINE__)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* GRPC_CORE_LIB_IOMGR_ERROR_H */

@@ -48,6 +48,8 @@ const int kNumResponseStreamsMsgs = 3;
 const char* const kServerCancelAfterReads = "cancel_after_reads";
 const char* const kServerTryCancelRequest = "server_try_cancel";
 const char* const kDebugInfoTrailerKey = "debug-info-bin";
+const char* const kServerFinishAfterNReads = "server_finish_after_n_reads";
+const char* const kServerUseCoalescingApi = "server_use_coalescing_api";
 
 typedef enum {
   DO_NOT_CANCEL = 0,
@@ -63,20 +65,20 @@ class TestServiceImpl : public ::grpc::testing::EchoTestService::Service {
       : signal_client_(false), host_(new grpc::string(host)) {}
 
   Status Echo(ServerContext* context, const EchoRequest* request,
-              EchoResponse* response) GRPC_OVERRIDE;
+              EchoResponse* response) override;
 
   // Unimplemented is left unimplemented to test the returned error.
 
   Status RequestStream(ServerContext* context,
                        ServerReader<EchoRequest>* reader,
-                       EchoResponse* response) GRPC_OVERRIDE;
+                       EchoResponse* response) override;
 
   Status ResponseStream(ServerContext* context, const EchoRequest* request,
-                        ServerWriter<EchoResponse>* writer) GRPC_OVERRIDE;
+                        ServerWriter<EchoResponse>* writer) override;
 
-  Status BidiStream(ServerContext* context,
-                    ServerReaderWriter<EchoResponse, EchoRequest>* stream)
-      GRPC_OVERRIDE;
+  Status BidiStream(
+      ServerContext* context,
+      ServerReaderWriter<EchoResponse, EchoRequest>* stream) override;
 
   bool signal_client() {
     std::unique_lock<std::mutex> lock(mu_);
