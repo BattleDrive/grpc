@@ -15,7 +15,7 @@ msbuild protobuf.sln /p:Platform=x64 /p:Configuration=Release
 if ERRORLEVEL 1 goto error
 
 cd ../../../../../vsprojects
-msbuild grpc.sln /t:grpc /t:grpc++ /p:Platform=x64 /p:Configuration=Release
+msbuild grpc.sln /t:grpc /t:grpc_dll /t:grpc++ /p:Platform=x64 /p:Configuration=Release
 if ERRORLEVEL 1 goto error
 
 msbuild grpc_protoc_plugins.sln /t:grpc_cpp_plugin /p:Platform=x64 /p:Configuration=Release

@@ -21,15 +21,12 @@ EXPORTS
     census_context_get_tag
     census_context_encode
     census_context_decode
-    census_trace_mask
-    census_set_trace_mask
     census_start_rpc_op_timestamp
     census_start_client_rpc_op
     census_set_rpc_client_peer
     census_start_server_rpc_op
     census_start_op
     census_end_op
-    census_trace_print
     census_trace_scan_start
     census_get_trace_record
     census_trace_scan_end
@@ -164,7 +161,6 @@ EXPORTS
     grpc_slice_eq
     grpc_slice_cmp
     grpc_slice_str_cmp
-    grpc_slice_buf_cmp
     grpc_slice_buf_start_eq
     grpc_slice_rchr
     grpc_slice_chr
@@ -189,6 +185,9 @@ EXPORTS
     grpc_slice_buffer_move_first_into_buffer
     grpc_slice_buffer_take_first
     grpc_slice_buffer_undo_take_first
+    grpc_socket_mutator_to_arg
+	grpc_exec_ctx_finish
+	grpc_always_ready_to_finish
     gpr_malloc
     gpr_zalloc
     gpr_free
