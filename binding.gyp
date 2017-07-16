@@ -39,9 +39,6 @@
 {
   'variables': {
     'runtime%': 'node',
-    # UV integration in C core is enabled by default. It can be disabled
-    # by setting this argument to anything else.
-    'grpc_uv%': 'true',
     # Some Node installations use the system installation of OpenSSL, and on
     # some systems, the system OpenSSL still does not have ALPN support. This
     # will let users recompile gRPC to work without ALPN.
@@ -90,17 +87,11 @@
       'include'
     ],
     'defines': [
-      'GPR_BACKWARDS_COMPATIBILITY_MODE'
+      'GPR_BACKWARDS_COMPATIBILITY_MODE',
+      'GRPC_ARES=0',
+      'GRPC_UV'
     ],
     'conditions': [
-      ['grpc_uv=="true"', {
-        'defines': [
-          'GRPC_ARES=0',
-          # Disabling this while bugs are ironed out. Uncomment this to
-          # re-enable libuv integration in C core.
-          'GRPC_UV'
-        ]
-      }],
       ['grpc_gcov=="true"', {
         'cflags': [
             '-O0',
@@ -139,6 +130,15 @@
         ]
       }, {
         'conditions': [
+          ["target_arch=='ia32'", {
+             "include_dirs": [ "<(node_root_dir)/deps/openssl/config/piii" ]
+          }],
+          ["target_arch=='x64'", {
+             "include_dirs": [ "<(node_root_dir)/deps/openssl/config/k8" ]
+          }],
+          ["target_arch=='arm'", {
+             "include_dirs": [ "<(node_root_dir)/deps/openssl/config/arm" ]
+          }],
           ['grpc_alpn=="true"', {
             'defines': [
               'TSI_OPENSSL_ALPN_SUPPORT=1'
@@ -151,17 +151,6 @@
         ],
         'include_dirs': [
           '<(node_root_dir)/deps/openssl/openssl/include',
-        ],
-        'conditions': [
-         ["target_arch=='ia32'", {
-             "include_dirs": [ "<(node_root_dir)/deps/openssl/config/piii" ]
-         }],
-         ["target_arch=='x64'", {
-             "include_dirs": [ "<(node_root_dir)/deps/openssl/config/k8" ]
-         }],
-         ["target_arch=='arm'", {
-             "include_dirs": [ "<(node_root_dir)/deps/openssl/config/arm" ]
-         }]
         ]
       }],
       ['OS == "win"', {
@@ -666,18 +655,12 @@
         'src/core/lib/channel/channel_args.c',
         'src/core/lib/channel/channel_stack.c',
         'src/core/lib/channel/channel_stack_builder.c',
-        'src/core/lib/channel/compress_filter.c',
         'src/core/lib/channel/connected_channel.c',
-        'src/core/lib/channel/deadline_filter.c',
         'src/core/lib/channel/handshaker.c',
         'src/core/lib/channel/handshaker_factory.c',
         'src/core/lib/channel/handshaker_registry.c',
-        'src/core/lib/channel/http_client_filter.c',
-        'src/core/lib/channel/http_server_filter.c',
-        'src/core/lib/channel/message_size_filter.c',
         'src/core/lib/compression/compression.c',
         'src/core/lib/compression/message_compress.c',
-        'src/core/lib/debug/trace.c',
         'src/core/lib/http/format_request.c',
         'src/core/lib/http/httpcli.c',
         'src/core/lib/http/parser.c',
@@ -688,9 +671,14 @@
         'src/core/lib/iomgr/endpoint_pair_uv.c',
         'src/core/lib/iomgr/endpoint_pair_windows.c',
         'src/core/lib/iomgr/error.c',
-        'src/core/lib/iomgr/ev_epoll_linux.c',
+        'src/core/lib/iomgr/ev_epoll1_linux.c',
+        'src/core/lib/iomgr/ev_epoll_limited_pollers_linux.c',
+        'src/core/lib/iomgr/ev_epoll_thread_pool_linux.c',
+        'src/core/lib/iomgr/ev_epollex_linux.c',
+        'src/core/lib/iomgr/ev_epollsig_linux.c',
         'src/core/lib/iomgr/ev_poll_posix.c',
         'src/core/lib/iomgr/ev_posix.c',
+        'src/core/lib/iomgr/ev_windows.c',
         'src/core/lib/iomgr/exec_ctx.c',
         'src/core/lib/iomgr/executor.c',
         'src/core/lib/iomgr/iocp_windows.c',
@@ -698,6 +686,7 @@
         'src/core/lib/iomgr/iomgr_posix.c',
         'src/core/lib/iomgr/iomgr_uv.c',
         'src/core/lib/iomgr/iomgr_windows.c',
+        'src/core/lib/iomgr/is_epollexclusive_available.c',
         'src/core/lib/iomgr/load_file.c',
         'src/core/lib/iomgr/lockfree_event.c',
         'src/core/lib/iomgr/network_status_tracker.c',
@@ -734,6 +723,7 @@
         'src/core/lib/iomgr/time_averaged_stats.c',
         'src/core/lib/iomgr/timer_generic.c',
         'src/core/lib/iomgr/timer_heap.c',
+        'src/core/lib/iomgr/timer_manager.c',
         'src/core/lib/iomgr/timer_uv.c',
         'src/core/lib/iomgr/udp_server.c',
         'src/core/lib/iomgr/unix_sockets_posix.c',
@@ -770,7 +760,7 @@
         'src/core/lib/surface/completion_queue.c',
         'src/core/lib/surface/completion_queue_factory.c',
         'src/core/lib/surface/event_string.c',
-        'src/core/lib/surface/lame_client.c',
+        'src/core/lib/surface/lame_client.cc',
         'src/core/lib/surface/metadata_array.c',
         'src/core/lib/surface/server.c',
         'src/core/lib/surface/validate_metadata.c',
@@ -788,6 +778,7 @@
         'src/core/lib/transport/timeout_encoding.c',
         'src/core/lib/transport/transport.c',
         'src/core/lib/transport/transport_op_string.c',
+        'src/core/lib/debug/trace.c',
         'src/core/ext/transport/chttp2/server/secure/server_secure_chttp2.c',
         'src/core/ext/transport/chttp2/transport/bin_decoder.c',
         'src/core/ext/transport/chttp2/transport/bin_encoder.c',
@@ -811,6 +802,10 @@
         'src/core/ext/transport/chttp2/transport/varint.c',
         'src/core/ext/transport/chttp2/transport/writing.c',
         'src/core/ext/transport/chttp2/alpn/alpn.c',
+        'src/core/ext/filters/http/client/http_client_filter.c',
+        'src/core/ext/filters/http/http_filters_plugin.c',
+        'src/core/ext/filters/http/message_compress/message_compress_filter.c',
+        'src/core/ext/filters/http/server/http_server_filter.c',
         'src/core/lib/http/httpcli_security_connector.c',
         'src/core/lib/security/context/security_context.c',
         'src/core/lib/security/credentials/composite/composite_credentials.c',
@@ -838,6 +833,7 @@
         'src/core/tsi/fake_transport_security.c',
         'src/core/tsi/ssl_transport_security.c',
         'src/core/tsi/transport_security.c',
+        'src/core/tsi/transport_security_adapter.c',
         'src/core/ext/transport/chttp2/server/chttp2_server.c',
         'src/core/ext/transport/chttp2/client/secure/secure_channel_create.c',
         'src/core/ext/filters/client_channel/channel_connectivity.c',
@@ -860,13 +856,16 @@
         'src/core/ext/filters/client_channel/subchannel.c',
         'src/core/ext/filters/client_channel/subchannel_index.c',
         'src/core/ext/filters/client_channel/uri_parser.c',
+        'src/core/ext/filters/deadline/deadline_filter.c',
         'src/core/ext/transport/chttp2/client/chttp2_connector.c',
         'src/core/ext/transport/chttp2/server/insecure/server_chttp2.c',
         'src/core/ext/transport/chttp2/server/insecure/server_chttp2_posix.c',
         'src/core/ext/transport/chttp2/client/insecure/channel_create.c',
         'src/core/ext/transport/chttp2/client/insecure/channel_create_posix.c',
+        'src/core/ext/filters/client_channel/lb_policy/grpclb/client_load_reporting_filter.c',
         'src/core/ext/filters/client_channel/lb_policy/grpclb/grpclb.c',
         'src/core/ext/filters/client_channel/lb_policy/grpclb/grpclb_channel_secure.c',
+        'src/core/ext/filters/client_channel/lb_policy/grpclb/grpclb_client_stats.c',
         'src/core/ext/filters/client_channel/lb_policy/grpclb/load_balancer_api.c',
         'src/core/ext/filters/client_channel/lb_policy/grpclb/proto/grpc/lb/v1/load_balancer.pb.c',
         'third_party/nanopb/pb_common.c',
@@ -889,6 +888,7 @@
         'src/core/ext/census/grpc_filter.c',
         'src/core/ext/census/grpc_plugin.c',
         'src/core/ext/census/initialize.c',
+        'src/core/ext/census/intrusive_hash_map.c',
         'src/core/ext/census/mlog.c',
         'src/core/ext/census/operation.c',
         'src/core/ext/census/placeholders.c',
@@ -896,6 +896,9 @@
         'src/core/ext/census/trace_context.c',
         'src/core/ext/census/tracing.c',
         'src/core/ext/filters/max_age/max_age_filter.c',
+        'src/core/ext/filters/message_size/message_size_filter.c',
+        'src/core/ext/filters/workarounds/workaround_cronet_compression_filter.c',
+        'src/core/ext/filters/workarounds/workaround_utils.c',
         'src/core/plugin_registry/grpc_plugin_registry.c',
       ],
       "conditions": [
@@ -949,13 +952,10 @@
         "src/node/ext/call_credentials.cc",
         "src/node/ext/channel.cc",
         "src/node/ext/channel_credentials.cc",
-        "src/node/ext/completion_queue_threadpool.cc",
-        "src/node/ext/completion_queue_uv.cc",
+        "src/node/ext/completion_queue.cc",
         "src/node/ext/node_grpc.cc",
         "src/node/ext/server.cc",
         "src/node/ext/server_credentials.cc",
-        "src/node/ext/server_generic.cc",
-        "src/node/ext/server_uv.cc",
         "src/node/ext/slice.cc",
         "src/node/ext/timeval.cc",
       ],
