@@ -1,33 +1,18 @@
 /*
  *
- * Copyright 2015, Google Inc.
- * All rights reserved.
+ * Copyright 2015 gRPC authors.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  */
 
@@ -51,12 +36,12 @@
   // Most operation subclasses don't set any flags in the grpc_op, and rely on the flag member being
   // initialized to zero.
   grpc_op _op;
-  void(^_handler)();
+  void(^_handler)(void);
 }
 
 - (void)finish {
   if (_handler) {
-    void(^handler)() = _handler;
+    void(^handler)(void) = _handler;
     _handler = nil;
     handler();
   }
@@ -70,19 +55,21 @@
 }
 
 - (instancetype)initWithMetadata:(NSDictionary *)metadata
-                         handler:(void (^)())handler {
+                         handler:(void (^)(void))handler {
   return [self initWithMetadata:metadata flags:0 handler:handler];
 }
 
 - (instancetype)initWithMetadata:(NSDictionary *)metadata
                            flags:(uint32_t)flags
-                         handler:(void (^)())handler {
+                         handler:(void (^)(void))handler {
   if (self = [super init]) {
     _op.op = GRPC_OP_SEND_INITIAL_METADATA;
     _op.data.send_initial_metadata.count = metadata.count;
     _op.data.send_initial_metadata.metadata = metadata.grpc_metadataArray;
     _op.data.send_initial_metadata.maybe_compression_level.is_set = false;
     _op.data.send_initial_metadata.maybe_compression_level.level = 0;
+    _op.data.send_initial_metadata.maybe_stream_compression_level.is_set = false;
+    _op.data.send_initial_metadata.maybe_stream_compression_level.level = 0;
     _op.flags = flags;
     _handler = handler;
   }
@@ -105,7 +92,7 @@
   return [self initWithMessage:nil handler:nil];
 }
 
-- (instancetype)initWithMessage:(NSData *)message handler:(void (^)())handler {
+- (instancetype)initWithMessage:(NSData *)message handler:(void (^)(void))handler {
   if (!message) {
     [NSException raise:NSInvalidArgumentException format:@"message cannot be nil"];
   }
@@ -129,7 +116,7 @@
   return [self initWithHandler:nil];
 }
 
-- (instancetype)initWithHandler:(void (^)())handler {
+- (instancetype)initWithHandler:(void (^)(void))handler {
   if (self = [super init]) {
     _op.op = GRPC_OP_SEND_CLOSE_FROM_CLIENT;
     _handler = handler;
@@ -251,12 +238,13 @@
 }
 
 - (instancetype)init {
-  return [self initWithHost:nil serverName:nil path:nil];
+  return [self initWithHost:nil serverName:nil path:nil timeout:0];
 }
 
 - (instancetype)initWithHost:(NSString *)host
                   serverName:(NSString *)serverName
-                        path:(NSString *)path {
+                        path:(NSString *)path
+                     timeout:(NSTimeInterval)timeout {
   if (!path || !host) {
     [NSException raise:NSInvalidArgumentException
                 format:@"path and host cannot be nil."];
@@ -268,7 +256,10 @@
     // queue. Currently we use a singleton queue.
     _queue = [GRPCCompletionQueue completionQueue];
 
-    _call = [[GRPCHost hostWithAddress:host] unmanagedCallWithPath:path serverName:serverName completionQueue:_queue];
+    _call = [[GRPCHost hostWithAddress:host] unmanagedCallWithPath:path
+                                                        serverName:serverName
+                                                           timeout:timeout
+                                                   completionQueue:_queue];
     if (_call == NULL) {
       return nil;
     }
@@ -280,7 +271,7 @@
   [self startBatchWithOperations:operations errorHandler:nil];
 }
 
-- (void)startBatchWithOperations:(NSArray *)operations errorHandler:(void (^)())errorHandler {
+- (void)startBatchWithOperations:(NSArray *)operations errorHandler:(void (^)(void))errorHandler {
   // Keep logs of op batches when we are running tests. Disabled when in production for improved
   // performance.
 #ifdef GRPC_TEST_OBJC

@@ -1,33 +1,18 @@
 /*
  *
- * Copyright 2015, Google Inc.
- * All rights reserved.
+ * Copyright 2015 gRPC authors.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  */
 
@@ -40,6 +25,7 @@
 #include <map>
 #include <memory>
 
+#include <grpc++/impl/codegen/byte_buffer.h>
 #include <grpc++/impl/codegen/call_hook.h>
 #include <grpc++/impl/codegen/client_context.h>
 #include <grpc++/impl/codegen/completion_queue_tag.h>
@@ -54,15 +40,15 @@
 #include <grpc/impl/codegen/compression_types.h>
 #include <grpc/impl/codegen/grpc_types.h>
 
-struct grpc_byte_buffer;
-
 namespace grpc {
 
 class ByteBuffer;
-class Call;
-class CallHook;
 class CompletionQueue;
 extern CoreCodegenInterface* g_core_codegen_interface;
+
+namespace internal {
+class Call;
+class CallHook;
 
 const char kBinaryErrorDetailsKey[] = "grpc-status-details-bin";
 
@@ -91,6 +77,7 @@ inline grpc_metadata* FillMetadataArray(
   }
   return metadata_array;
 }
+}  // namespace internal
 
 /// Per-message write options.
 class WriteOptions {
@@ -179,10 +166,19 @@ class WriteOptions {
 
   /// Clears flag indicating that this is the last message in a stream,
   /// disabling coalescing.
-  inline WriteOptions& clear_last_messsage() {
+  inline WriteOptions& clear_last_message() {
     last_message_ = false;
     return *this;
   }
+
+  /// Guarantee that all bytes have been written to the wire before completing
+  /// this write (usually writes are completed when they pass flow control)
+  inline WriteOptions& set_write_through() {
+    SetBit(GRPC_WRITE_THROUGH);
+    return *this;
+  }
+
+  inline bool is_write_through() const { return GetBit(GRPC_WRITE_THROUGH); }
 
   /// Get value for the flag indicating that this is the last message, and
   /// should be coalesced with trailing metadata.
@@ -206,6 +202,7 @@ class WriteOptions {
   bool last_message_;
 };
 
+namespace internal {
 /// Default argument for CallOpSet. I is unused by the class, but can be
 /// used for generating multiple names for the same thing.
 template <int I>
@@ -219,12 +216,14 @@ class CallOpSendInitialMetadata {
  public:
   CallOpSendInitialMetadata() : send_(false) {
     maybe_compression_level_.is_set = false;
+    maybe_stream_compression_level_.is_set = false;
   }
 
   void SendInitialMetadata(
       const std::multimap<grpc::string, grpc::string>& metadata,
       uint32_t flags) {
     maybe_compression_level_.is_set = false;
+    maybe_stream_compression_level_.is_set = false;
     send_ = true;
     flags_ = flags;
     initial_metadata_ =
@@ -234,6 +233,11 @@ class CallOpSendInitialMetadata {
   void set_compression_level(grpc_compression_level level) {
     maybe_compression_level_.is_set = true;
     maybe_compression_level_.level = level;
+  }
+
+  void set_stream_compression_level(grpc_stream_compression_level level) {
+    maybe_stream_compression_level_.is_set = true;
+    maybe_stream_compression_level_.level = level;
   }
 
  protected:
@@ -251,6 +255,12 @@ class CallOpSendInitialMetadata {
       op->data.send_initial_metadata.maybe_compression_level.level =
           maybe_compression_level_.level;
     }
+    op->data.send_initial_metadata.maybe_stream_compression_level.is_set =
+        maybe_stream_compression_level_.is_set;
+    if (maybe_stream_compression_level_.is_set) {
+      op->data.send_initial_metadata.maybe_stream_compression_level.level =
+          maybe_stream_compression_level_.level;
+    }
   }
   void FinishOp(bool* status) {
     if (!send_) return;
@@ -266,11 +276,15 @@ class CallOpSendInitialMetadata {
     bool is_set;
     grpc_compression_level level;
   } maybe_compression_level_;
+  struct {
+    bool is_set;
+    grpc_stream_compression_level level;
+  } maybe_stream_compression_level_;
 };
 
 class CallOpSendMessage {
  public:
-  CallOpSendMessage() : send_buf_(nullptr), own_buf_(false) {}
+  CallOpSendMessage() : send_buf_() {}
 
   /// Send \a message using \a options for the write. The \a options are cleared
   /// after use.
@@ -283,30 +297,36 @@ class CallOpSendMessage {
 
  protected:
   void AddOp(grpc_op* ops, size_t* nops) {
-    if (send_buf_ == nullptr) return;
+    if (!send_buf_.Valid()) return;
     grpc_op* op = &ops[(*nops)++];
     op->op = GRPC_OP_SEND_MESSAGE;
     op->flags = write_options_.flags();
     op->reserved = NULL;
-    op->data.send_message.send_message = send_buf_;
+    op->data.send_message.send_message = send_buf_.c_buffer();
     // Flags are per-message: clear them after use.
     write_options_.Clear();
   }
-  void FinishOp(bool* status) {
-    if (own_buf_) g_core_codegen_interface->grpc_byte_buffer_destroy(send_buf_);
-    send_buf_ = nullptr;
-  }
+  void FinishOp(bool* status) { send_buf_.Clear(); }
 
  private:
-  grpc_byte_buffer* send_buf_;
+  ByteBuffer send_buf_;
   WriteOptions write_options_;
-  bool own_buf_;
 };
 
 template <class M>
 Status CallOpSendMessage::SendMessage(const M& message, WriteOptions options) {
   write_options_ = options;
-  return SerializationTraits<M>::Serialize(message, &send_buf_, &own_buf_);
+  bool own_buf;
+  // TODO(vjpai): Remove the void below when possible
+  // The void in the template parameter below should not be needed
+  // (since it should be implicit) but is needed due to an observed
+  // difference in behavior between clang and gcc for certain internal users
+  Status result = SerializationTraits<M, void>::Serialize(
+      message, send_buf_.bbuf_ptr(), &own_buf);
+  if (!own_buf) {
+    send_buf_.Duplicate();
+  }
+  return result;
 }
 
 template <class M>
@@ -336,18 +356,20 @@ class CallOpRecvMessage {
     op->op = GRPC_OP_RECV_MESSAGE;
     op->flags = 0;
     op->reserved = NULL;
-    op->data.recv_message.recv_message = &recv_buf_;
+    op->data.recv_message.recv_message = recv_buf_.c_buffer_ptr();
   }
 
   void FinishOp(bool* status) {
     if (message_ == nullptr) return;
-    if (recv_buf_) {
+    if (recv_buf_.Valid()) {
       if (*status) {
         got_message = *status =
-            SerializationTraits<R>::Deserialize(recv_buf_, message_).ok();
+            SerializationTraits<R>::Deserialize(recv_buf_.bbuf_ptr(), message_)
+                .ok();
+        recv_buf_.Release();
       } else {
         got_message = false;
-        g_core_codegen_interface->grpc_byte_buffer_destroy(recv_buf_);
+        recv_buf_.Clear();
       }
     } else {
       got_message = false;
@@ -360,8 +382,28 @@ class CallOpRecvMessage {
 
  private:
   R* message_;
-  grpc_byte_buffer* recv_buf_;
+  ByteBuffer recv_buf_;
   bool allow_not_getting_message_;
+};
+
+class DeserializeFunc {
+ public:
+  virtual Status Deserialize(ByteBuffer* buf) = 0;
+  virtual ~DeserializeFunc() {}
+};
+
+template <class R>
+class DeserializeFuncType final : public DeserializeFunc {
+ public:
+  DeserializeFuncType(R* message) : message_(message) {}
+  Status Deserialize(ByteBuffer* buf) override {
+    return SerializationTraits<R>::Deserialize(buf->bbuf_ptr(), message_);
+  }
+
+  ~DeserializeFuncType() override {}
+
+ private:
+  R* message_;  // Not a managed pointer because management is external to this
 };
 
 class CallOpGenericRecvMessage {
@@ -371,9 +413,10 @@ class CallOpGenericRecvMessage {
 
   template <class R>
   void RecvMessage(R* message) {
-    deserialize_ = [message](grpc_byte_buffer* buf) -> Status {
-      return SerializationTraits<R>::Deserialize(buf, message);
-    };
+    // Use an explicit base class pointer to avoid resolution error in the
+    // following unique_ptr::reset for some old implementations.
+    DeserializeFunc* func = new DeserializeFuncType<R>(message);
+    deserialize_.reset(func);
   }
 
   // Do not change status if no message is received.
@@ -388,18 +431,19 @@ class CallOpGenericRecvMessage {
     op->op = GRPC_OP_RECV_MESSAGE;
     op->flags = 0;
     op->reserved = NULL;
-    op->data.recv_message.recv_message = &recv_buf_;
+    op->data.recv_message.recv_message = recv_buf_.c_buffer_ptr();
   }
 
   void FinishOp(bool* status) {
     if (!deserialize_) return;
-    if (recv_buf_) {
+    if (recv_buf_.Valid()) {
       if (*status) {
         got_message = true;
-        *status = deserialize_(recv_buf_).ok();
+        *status = deserialize_->Deserialize(&recv_buf_).ok();
+        recv_buf_.Release();
       } else {
         got_message = false;
-        g_core_codegen_interface->grpc_byte_buffer_destroy(recv_buf_);
+        recv_buf_.Clear();
       }
     } else {
       got_message = false;
@@ -407,13 +451,12 @@ class CallOpGenericRecvMessage {
         *status = false;
       }
     }
-    deserialize_ = DeserializeFunc();
+    deserialize_.reset();
   }
 
  private:
-  typedef std::function<Status(grpc_byte_buffer*)> DeserializeFunc;
-  DeserializeFunc deserialize_;
-  grpc_byte_buffer* recv_buf_;
+  std::unique_ptr<DeserializeFunc> deserialize_;
+  ByteBuffer recv_buf_;
   bool allow_not_getting_message_;
 };
 
@@ -531,6 +574,7 @@ class CallOpClientRecvStatus {
     op->data.recv_status_on_client.trailing_metadata = metadata_map_->arr();
     op->data.recv_status_on_client.status = &status_code_;
     op->data.recv_status_on_client.status_details = &error_message_;
+    op->data.recv_status_on_client.error_string = nullptr;
     op->flags = 0;
     op->reserved = NULL;
   }
@@ -608,6 +652,7 @@ class CallOpSet : public CallOpSetInterface,
     this->Op5::FinishOp(status);
     this->Op6::FinishOp(status);
     *tag = return_tag_;
+
     g_core_codegen_interface->grpc_call_unref(call_);
     return true;
   }
@@ -666,7 +711,7 @@ class Call final {
   grpc_call* call_;
   int max_receive_message_size_;
 };
-
+}  // namespace internal
 }  // namespace grpc
 
 #endif  // GRPCXX_IMPL_CODEGEN_CALL_H

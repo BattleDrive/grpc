@@ -1,33 +1,18 @@
 ﻿#region Copyright notice and license
 
-// Copyright 2015, Google Inc.
-// All rights reserved.
+// Copyright 2015 gRPC authors.
 //
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #endregion
 
@@ -35,14 +20,84 @@ using System;
 using Grpc.Core;
 using Grpc.Core.Internal;
 using Grpc.Core.Logging;
+using CommandLine;
+using CommandLine.Text;
 
 namespace Grpc.Microbenchmarks
 {
     class Program
     {
+        public enum MicrobenchmarkType
+        {
+            CompletionRegistry,
+            PInvokeByteArray,
+            SendMessage
+        }
+
+        private class BenchmarkOptions
+        {
+            [Option("benchmark", Required = true, HelpText = "Benchmark to run")]
+            public MicrobenchmarkType Benchmark { get; set; }
+        }
+
         public static void Main(string[] args)
         {
-            GrpcEnvironment.SetLogger(new TextWriterLogger(Console.Error));
+            GrpcEnvironment.SetLogger(new ConsoleLogger());
+            var parserResult = Parser.Default.ParseArguments<BenchmarkOptions>(args)
+                .WithNotParsed(errors => {
+                    Console.WriteLine("Supported benchmarks:");
+                    foreach (var enumValue in Enum.GetValues(typeof(MicrobenchmarkType)))
+                    {
+                        Console.WriteLine("  " + enumValue);
+                    }
+                    Environment.Exit(1);
+                })
+                .WithParsed(options =>
+                {
+                    switch (options.Benchmark)
+                    {
+                        case MicrobenchmarkType.CompletionRegistry:
+                          RunCompletionRegistryBenchmark();
+                          break;
+                        case MicrobenchmarkType.PInvokeByteArray:
+                          RunPInvokeByteArrayBenchmark();
+                          break;
+                        case MicrobenchmarkType.SendMessage:
+                          RunSendMessageBenchmark();
+                          break;
+                        default:
+                          throw new ArgumentException("Unsupported benchmark.");
+                    }
+                });
+        }
+
+        static void RunCompletionRegistryBenchmark()
+        {
+            var benchmark = new CompletionRegistryBenchmark();
+            benchmark.Init();
+            foreach (int threadCount in new int[] {1, 1, 2, 4, 8, 12})
+            {
+                foreach (bool useSharedRegistry in new bool[] {false, true})
+                {
+                    benchmark.Run(threadCount, 4 * 1000 * 1000, useSharedRegistry);
+                }
+            }
+            benchmark.Cleanup();
+        }
+
+        static void RunPInvokeByteArrayBenchmark()
+        {
+            var benchmark = new PInvokeByteArrayBenchmark();
+            benchmark.Init();
+            foreach (int threadCount in new int[] {1, 1, 2, 4, 8, 12})
+            {
+                benchmark.Run(threadCount, 4 * 1000 * 1000, 0);
+            }
+            benchmark.Cleanup();
+        }
+
+        static void RunSendMessageBenchmark()
+        {
             var benchmark = new SendMessageBenchmark();
             benchmark.Init();
             foreach (int threadCount in new int[] {1, 1, 2, 4, 8, 12})

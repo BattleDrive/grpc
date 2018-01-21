@@ -1,32 +1,17 @@
 #!/usr/bin/env python
-# Copyright 2016, Google Inc.
-# All rights reserved.
+# Copyright 2016 gRPC authors.
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are
-# met:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-#     * Redistributions of source code must retain the above copyright
-# notice, this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above
-# copyright notice, this list of conditions and the following disclaimer
-# in the documentation and/or other materials provided with the
-# distribution.
-#     * Neither the name of Google Inc. nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Definition of targets run distribution package tests."""
 
@@ -120,7 +105,9 @@ class CSharpDistribTest(object):
           use_workspace=True)
     elif self.platform == 'windows':
       if self.arch == 'x64':
-        environ={'MSBUILD_EXTRA_ARGS': '/p:Platform=x64',
+        # Use double leading / as the first occurence gets removed by msys bash
+        # when invoking the .bat file (side-effect of posix path conversion)
+        environ={'MSBUILD_EXTRA_ARGS': '//p:Platform=x64',
                  'DISTRIBTEST_OUTPATH': 'DistribTest\\bin\\x64\\Debug'}
       else:
         environ={'DISTRIBTEST_OUTPATH': 'DistribTest\\bin\\Debug'}
@@ -133,50 +120,6 @@ class CSharpDistribTest(object):
 
   def __str__(self):
     return self.name
-
-class NodeDistribTest(object):
-  """Tests Node package"""
-
-  def __init__(self, platform, arch, docker_suffix, node_version):
-    self.name = 'node_npm_%s_%s_%s' % (platform, arch, node_version)
-    self.platform = platform
-    self.arch = arch
-    self.node_version = node_version
-    self.labels = ['distribtest', 'node', platform, arch,
-                   'node-%s' % node_version]
-    if docker_suffix is not None:
-      self.name += '_%s' % docker_suffix
-      self.docker_suffix = docker_suffix
-      self.labels.append(docker_suffix)
-
-  def pre_build_jobspecs(self):
-    return []
-
-  def build_jobspec(self):
-    if self.platform == 'linux':
-      linux32 = ''
-      if self.arch == 'x86':
-        linux32 = 'linux32'
-      return create_docker_jobspec(self.name,
-                                   'tools/dockerfile/distribtest/node_%s_%s' % (
-                                       self.docker_suffix,
-                                       self.arch),
-                                   '%s test/distrib/node/run_distrib_test.sh %s' % (
-                                       linux32,
-                                       self.node_version),
-                                   copy_rel_path='test/distrib')
-    elif self.platform == 'macos':
-      return create_jobspec(self.name,
-                            ['test/distrib/node/run_distrib_test.sh',
-                             str(self.node_version)],
-                            environ={'EXTERNAL_GIT_ROOT': '../../../..'},
-                            use_workspace=True)
-    else:
-      raise Exception("Not supported yet.")
-
-    def __str__(self):
-      return self.name
-
 
 class PythonDistribTest(object):
   """Tests Python package"""
@@ -220,6 +163,10 @@ class RubyDistribTest(object):
     return []
 
   def build_jobspec(self):
+    arch_to_gem_arch = {
+        'x64': 'x86_64',
+        'x86': 'x86',
+    }
     if not self.platform == 'linux':
       raise Exception("Not supported yet.")
 
@@ -227,7 +174,8 @@ class RubyDistribTest(object):
           'tools/dockerfile/distribtest/ruby_%s_%s' % (
               self.docker_suffix,
               self.arch),
-          'test/distrib/ruby/run_distrib_test.sh',
+          'test/distrib/ruby/run_distrib_test.sh %s %s' %
+          (arch_to_gem_arch[self.arch], self.platform),
           copy_rel_path='test/distrib')
 
   def __str__(self):
@@ -270,12 +218,13 @@ class PHPDistribTest(object):
 class CppDistribTest(object):
   """Tests Cpp make intall by building examples."""
 
-  def __init__(self, platform, arch, docker_suffix=None):
-    self.name = 'cpp_%s_%s_%s' % (platform, arch, docker_suffix)
+  def __init__(self, platform, arch, docker_suffix=None, testcase=None):
+    self.name = 'cpp_%s_%s_%s_%s' % (platform, arch, docker_suffix, testcase)
     self.platform = platform
     self.arch = arch
     self.docker_suffix = docker_suffix
-    self.labels = ['distribtest', 'cpp', platform, arch, docker_suffix]
+    self.testcase = testcase
+    self.labels = ['distribtest', 'cpp', platform, arch, docker_suffix, testcase]
 
   def pre_build_jobspecs(self):
     return []
@@ -286,7 +235,7 @@ class CppDistribTest(object):
                                    'tools/dockerfile/distribtest/cpp_%s_%s' % (
                                        self.docker_suffix,
                                        self.arch),
-                                   'test/distrib/cpp/run_distrib_test.sh')
+                                   'test/distrib/cpp/run_distrib_test_%s.sh' % self.testcase)
     else:
       raise Exception("Not supported yet.")
 
@@ -296,7 +245,8 @@ class CppDistribTest(object):
 
 def targets():
   """Gets list of supported targets"""
-  return [CppDistribTest('linux', 'x64', 'jessie'),
+  return [CppDistribTest('linux', 'x64', 'jessie', 'routeguide'),
+          CppDistribTest('linux', 'x64', 'jessie', 'cmake'),
           CSharpDistribTest('linux', 'x64', 'wheezy'),
           CSharpDistribTest('linux', 'x64', 'jessie'),
           CSharpDistribTest('linux', 'x86', 'jessie'),
@@ -340,14 +290,6 @@ def targets():
           RubyDistribTest('linux', 'x64', 'ubuntu1504'),
           RubyDistribTest('linux', 'x64', 'ubuntu1510'),
           RubyDistribTest('linux', 'x64', 'ubuntu1604'),
-          NodeDistribTest('macos', 'x64', None, '4'),
-          NodeDistribTest('macos', 'x64', None, '5'),
-          NodeDistribTest('linux', 'x86', 'jessie', '4'),
           PHPDistribTest('linux', 'x64', 'jessie'),
           PHPDistribTest('macos', 'x64'),
-          ] + [
-            NodeDistribTest('linux', 'x64', os, version)
-            for os in ('wheezy', 'jessie', 'ubuntu1204', 'ubuntu1404',
-                       'ubuntu1504', 'ubuntu1510', 'ubuntu1604')
-            for version in ('4', '5')
           ]

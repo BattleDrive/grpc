@@ -1,33 +1,18 @@
 /*
  *
- * Copyright 2016, Google Inc.
- * All rights reserved.
+ * Copyright 2016 gRPC authors.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  */
 
@@ -36,16 +21,16 @@
 #include <benchmark/benchmark.h>
 #include <gflags/gflags.h>
 #include <fstream>
-#include "src/core/lib/profiling/timers.h"
-#include "src/cpp/client/create_channel_internal.h"
-#include "src/proto/grpc/testing/echo.grpc.pb.h"
-#include "test/cpp/microbenchmarks/fullstack_context_mutators.h"
-#include "test/cpp/microbenchmarks/fullstack_fixtures.h"
-extern "C" {
+
 #include "src/core/ext/transport/chttp2/transport/chttp2_transport.h"
 #include "src/core/ext/transport/chttp2/transport/internal.h"
+#include "src/core/lib/iomgr/timer_manager.h"
+#include "src/core/lib/profiling/timers.h"
+#include "src/proto/grpc/testing/echo.grpc.pb.h"
 #include "test/core/util/trickle_endpoint.h"
-}
+#include "test/cpp/microbenchmarks/fullstack_context_mutators.h"
+#include "test/cpp/microbenchmarks/fullstack_fixtures.h"
+#include "test/cpp/util/test_config.h"
 
 DEFINE_bool(log, false, "Log state to CSV files");
 DEFINE_int32(
@@ -59,6 +44,22 @@ DEFINE_int32(warmup_max_time_seconds, 10,
 
 namespace grpc {
 namespace testing {
+
+gpr_atm g_now_us = 0;
+
+static gpr_timespec fake_now(gpr_clock_type clock_type) {
+  gpr_timespec t;
+  gpr_atm now = gpr_atm_no_barrier_load(&g_now_us);
+  t.tv_sec = now / GPR_US_PER_SEC;
+  t.tv_nsec = (now % GPR_US_PER_SEC) * GPR_NS_PER_US;
+  t.clock_type = clock_type;
+  return t;
+}
+
+static void inc_time() {
+  gpr_atm_no_barrier_fetch_add(&g_now_us, 100);
+  grpc_timer_manager_tick();
+}
 
 static void* tag(intptr_t x) { return reinterpret_cast<void*>(x); }
 
@@ -88,11 +89,11 @@ class TrickledCHTTP2 : public EndpointPairFixture {
       log_.reset(new std::ofstream(fn.str().c_str()));
       write_csv(log_.get(), "t", "iteration", "client_backlog",
                 "server_backlog", "client_t_stall", "client_s_stall",
-                "server_t_stall", "server_s_stall", "client_t_outgoing",
-                "server_t_outgoing", "client_t_incoming", "server_t_incoming",
-                "client_s_outgoing_delta", "server_s_outgoing_delta",
-                "client_s_incoming_delta", "server_s_incoming_delta",
-                "client_s_announce_window", "server_s_announce_window",
+                "server_t_stall", "server_s_stall", "client_t_remote",
+                "server_t_remote", "client_t_announced", "server_t_announced",
+                "client_s_remote_delta", "server_s_remote_delta",
+                "client_s_local_delta", "server_s_local_delta",
+                "client_s_announced_delta", "server_s_announced_delta",
                 "client_peer_iws", "client_local_iws", "client_sent_iws",
                 "client_acked_iws", "server_peer_iws", "server_local_iws",
                 "server_sent_iws", "server_acked_iws", "client_queued_bytes",
@@ -101,8 +102,6 @@ class TrickledCHTTP2 : public EndpointPairFixture {
   }
 
   void AddToLabel(std::ostream& out, benchmark::State& state) {
-    grpc_chttp2_transport* client =
-        reinterpret_cast<grpc_chttp2_transport*>(client_transport_);
     out << " writes/iter:"
         << ((double)stats_.num_writes / (double)state.iterations())
         << " cli_transport_stalls/iter:"
@@ -118,11 +117,10 @@ class TrickledCHTTP2 : public EndpointPairFixture {
             (double)state.iterations())
         << " svr_stream_stalls/iter:"
         << ((double)server_stats_.streams_stalled_due_to_stream_flow_control /
-            (double)state.iterations())
-        << " cli_bw_est:" << (double)client->bdp_estimator.bw_est;
+            (double)state.iterations());
   }
 
-  void Log(int64_t iteration) {
+  void Log(int64_t iteration) GPR_ATTRIBUTE_NO_TSAN {
     auto now = gpr_time_sub(gpr_now(GPR_CLOCK_MONOTONIC), start_);
     grpc_chttp2_transport* client =
         reinterpret_cast<grpc_chttp2_transport*>(client_transport_);
@@ -137,22 +135,27 @@ class TrickledCHTTP2 : public EndpointPairFixture {
             ? static_cast<grpc_chttp2_stream*>(server->stream_map.values[0])
             : nullptr;
     write_csv(
-        log_.get(), static_cast<double>(now.tv_sec) +
-                        1e-9 * static_cast<double>(now.tv_nsec),
+        log_.get(),
+        static_cast<double>(now.tv_sec) +
+            1e-9 * static_cast<double>(now.tv_nsec),
         iteration, grpc_trickle_get_backlog(endpoint_pair_.client),
         grpc_trickle_get_backlog(endpoint_pair_.server),
         client->lists[GRPC_CHTTP2_LIST_STALLED_BY_TRANSPORT].head != nullptr,
         client->lists[GRPC_CHTTP2_LIST_STALLED_BY_STREAM].head != nullptr,
         server->lists[GRPC_CHTTP2_LIST_STALLED_BY_TRANSPORT].head != nullptr,
         server->lists[GRPC_CHTTP2_LIST_STALLED_BY_STREAM].head != nullptr,
-        client->outgoing_window, server->outgoing_window,
-        client->incoming_window, server->incoming_window,
-        client_stream ? client_stream->outgoing_window_delta : -1,
-        server_stream ? server_stream->outgoing_window_delta : -1,
-        client_stream ? client_stream->incoming_window_delta : -1,
-        server_stream ? server_stream->incoming_window_delta : -1,
-        client_stream ? client_stream->announce_window : -1,
-        server_stream ? server_stream->announce_window : -1,
+        client->flow_control->remote_window_,
+        server->flow_control->remote_window_,
+        client->flow_control->announced_window_,
+        server->flow_control->announced_window_,
+        client_stream ? client_stream->flow_control->remote_window_delta_ : -1,
+        server_stream ? server_stream->flow_control->remote_window_delta_ : -1,
+        client_stream ? client_stream->flow_control->local_window_delta_ : -1,
+        server_stream ? server_stream->flow_control->local_window_delta_ : -1,
+        client_stream ? client_stream->flow_control->announced_window_delta_
+                      : -1,
+        server_stream ? server_stream->flow_control->announced_window_delta_
+                      : -1,
         client->settings[GRPC_PEER_SETTINGS]
                         [GRPC_CHTTP2_SETTINGS_INITIAL_WINDOW_SIZE],
         client->settings[GRPC_LOCAL_SETTINGS]
@@ -175,12 +178,12 @@ class TrickledCHTTP2 : public EndpointPairFixture {
 
   void Step(bool update_stats) {
     grpc_exec_ctx exec_ctx = GRPC_EXEC_CTX_INIT;
+    inc_time();
     size_t client_backlog =
         grpc_trickle_endpoint_trickle(&exec_ctx, endpoint_pair_.client);
     size_t server_backlog =
         grpc_trickle_endpoint_trickle(&exec_ctx, endpoint_pair_.server);
     grpc_exec_ctx_finish(&exec_ctx);
-
     if (update_stats) {
       UpdateStats((grpc_chttp2_transport*)client_transport_, &client_stats_,
                   client_backlog);
@@ -210,12 +213,13 @@ class TrickledCHTTP2 : public EndpointPairFixture {
     return p;
   }
 
-  void UpdateStats(grpc_chttp2_transport* t, Stats* s, size_t backlog) {
+  void UpdateStats(grpc_chttp2_transport* t, Stats* s,
+                   size_t backlog) GPR_ATTRIBUTE_NO_TSAN {
     if (backlog == 0) {
-      if (t->lists[GRPC_CHTTP2_LIST_STALLED_BY_STREAM].head != NULL) {
+      if (t->lists[GRPC_CHTTP2_LIST_STALLED_BY_STREAM].head != nullptr) {
         s->streams_stalled_due_to_stream_flow_control++;
       }
-      if (t->lists[GRPC_CHTTP2_LIST_STALLED_BY_TRANSPORT].head != NULL) {
+      if (t->lists[GRPC_CHTTP2_LIST_STALLED_BY_TRANSPORT].head != nullptr) {
         s->streams_stalled_due_to_transport_flow_control++;
       }
     }
@@ -229,9 +233,8 @@ static void TrickleCQNext(TrickledCHTTP2* fixture, void** t, bool* ok,
                           int64_t iteration) {
   while (true) {
     fixture->Log(iteration);
-    switch (fixture->cq()->AsyncNext(
-        t, ok, gpr_time_add(gpr_now(GPR_CLOCK_MONOTONIC),
-                            gpr_time_from_micros(100, GPR_TIMESPAN)))) {
+    switch (
+        fixture->cq()->AsyncNext(t, ok, gpr_inf_past(GPR_CLOCK_MONOTONIC))) {
       case CompletionQueue::TIMEOUT:
         fixture->Step(iteration != -1);
         break;
@@ -306,9 +309,15 @@ static void BM_PumpStreamServerToClient_Trickle(benchmark::State& state) {
       inner_loop(false);
     }
     response_rw.Finish(Status::OK, tag(1));
-    need_tags = (1 << 0) | (1 << 1);
+    grpc::Status status;
+    request_rw->Finish(&status, tag(2));
+    need_tags = (1 << 0) | (1 << 1) | (1 << 2);
     while (need_tags) {
       TrickleCQNext(fixture.get(), &t, &ok, -1);
+      if (t == tag(0) && ok) {
+        request_rw->Read(&recv_response, tag(0));
+        continue;
+      }
       int i = (int)(intptr_t)t;
       GPR_ASSERT(need_tags & (1 << i));
       need_tags &= ~(1 << i);
@@ -433,11 +442,15 @@ static void UnaryTrickleArgs(benchmark::internal::Benchmark* b) {
   }
 }
 BENCHMARK(BM_PumpUnbalancedUnary_Trickle)->Apply(UnaryTrickleArgs);
-}
-}
+}  // namespace testing
+}  // namespace grpc
+
+extern "C" gpr_timespec (*gpr_now_impl)(gpr_clock_type clock_type);
 
 int main(int argc, char** argv) {
   ::benchmark::Initialize(&argc, argv);
-  ::google::ParseCommandLineFlags(&argc, &argv, false);
+  ::grpc::testing::InitTest(&argc, &argv, false);
+  grpc_timer_manager_set_threading(false);
+  gpr_now_impl = ::grpc::testing::fake_now;
   ::benchmark::RunSpecifiedBenchmarks();
 }

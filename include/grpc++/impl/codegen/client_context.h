@@ -1,33 +1,18 @@
 /*
  *
- * Copyright 2015, Google Inc.
- * All rights reserved.
+ * Copyright 2015 gRPC authors.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  */
 
@@ -75,7 +60,16 @@ class Channel;
 class ChannelInterface;
 class CompletionQueue;
 class CallCredentials;
+class ClientContext;
+
+namespace internal {
 class RpcMethod;
+class CallOpClientRecvStatus;
+class CallOpRecvInitialMetadata;
+template <class InputMessage, class OutputMessage>
+class BlockingUnaryCallImpl;
+}  // namespace internal
+
 template <class R>
 class ClientReader;
 template <class W>
@@ -161,7 +155,7 @@ class InteropClientContextInspector;
 ///
 /// Context settings are only relevant to the call they are invoked with, that
 /// is to say, they aren't sticky. Some of these settings, such as the
-/// compression options, can be made persistant at channel construction time
+/// compression options, can be made persistent at channel construction time
 /// (see \a grpc::CreateCustomChannel).
 ///
 /// \warning ClientContext instances should \em not be reused across rpcs.
@@ -244,7 +238,7 @@ class ClientContext {
 
   /// EXPERIMENTAL: Set this request to be cacheable.
   /// If set, grpc is free to use the HTTP GET verb for sending the request,
-  /// with the possibility of receiving a cached respone.
+  /// with the possibility of receiving a cached response.
   void set_cacheable(bool cacheable) { cacheable_ = cacheable; }
 
   /// EXPERIMENTAL: Trigger wait-for-ready or not on this request.
@@ -290,7 +284,7 @@ class ClientContext {
   /// client’s identity, role, or whether it is authorized to make a particular
   /// call.
   ///
-  /// \see  http://www.grpc.io/docs/guides/auth.html
+  /// \see  https://grpc.io/docs/guides/auth.html
   void set_credentials(const std::shared_ptr<CallCredentials>& creds) {
     creds_ = creds;
   }
@@ -360,8 +354,8 @@ class ClientContext {
   ClientContext& operator=(const ClientContext&);
 
   friend class ::grpc::testing::InteropClientContextInspector;
-  friend class CallOpClientRecvStatus;
-  friend class CallOpRecvInitialMetadata;
+  friend class ::grpc::internal::CallOpClientRecvStatus;
+  friend class ::grpc::internal::CallOpRecvInitialMetadata;
   friend class Channel;
   template <class R>
   friend class ::grpc::ClientReader;
@@ -378,11 +372,7 @@ class ClientContext {
   template <class R>
   friend class ::grpc::ClientAsyncResponseReader;
   template <class InputMessage, class OutputMessage>
-  friend Status BlockingUnaryCall(ChannelInterface* channel,
-                                  const RpcMethod& method,
-                                  ClientContext* context,
-                                  const InputMessage& request,
-                                  OutputMessage* result);
+  friend class ::grpc::internal::BlockingUnaryCallImpl;
 
   grpc_call* call() const { return call_; }
   void set_call(grpc_call* call, const std::shared_ptr<Channel>& channel);
@@ -414,8 +404,8 @@ class ClientContext {
   mutable std::shared_ptr<const AuthContext> auth_context_;
   struct census_context* census_context_;
   std::multimap<grpc::string, grpc::string> send_initial_metadata_;
-  MetadataMap recv_initial_metadata_;
-  MetadataMap trailing_metadata_;
+  internal::MetadataMap recv_initial_metadata_;
+  internal::MetadataMap trailing_metadata_;
 
   grpc_call* propagate_from_call_;
   PropagationOptions propagation_options_;

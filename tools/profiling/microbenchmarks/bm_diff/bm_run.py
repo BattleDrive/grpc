@@ -1,31 +1,18 @@
-# Copyright 2017, Google Inc.
-# All rights reserved.
+#!/usr/bin/env python2.7
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are
-# met:
+# Copyright 2017 gRPC authors.
 #
-#     * Redistributions of source code must retain the above copyright
-# notice, this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above
-# copyright notice, this list of conditions and the following disclaimer
-# in the documentation and/or other materials provided with the
-# distribution.
-#     * Neither the name of Google Inc. nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """ Python utility to run opt and counters benchmarks and save json output """
 
@@ -69,10 +56,10 @@ def _args():
   )
   argp.add_argument(
     '-r',
-    '--repetitions',
-    type=int,
-    default=1,
-    help='Number of repetitions to pass to the benchmarks')
+    '--regex',
+    type=str,
+    default="",
+    help='Regex to filter benchmarks run')
   argp.add_argument(
     '-l',
     '--loops',
@@ -90,18 +77,17 @@ def _args():
   return args
 
 
-def _collect_bm_data(bm, cfg, name, reps, idx, loops):
+def _collect_bm_data(bm, cfg, name, regex, idx, loops):
   jobs_list = []
   for line in subprocess.check_output(
     ['bm_diff_%s/%s/%s' % (name, cfg, bm),
-     '--benchmark_list_tests']).splitlines():
+     '--benchmark_list_tests', '--benchmark_filter=%s' % regex]).splitlines():
     stripped_line = line.strip().replace("/", "_").replace(
       "<", "_").replace(">", "_").replace(", ", "_")
     cmd = [
       'bm_diff_%s/%s/%s' % (name, cfg, bm), '--benchmark_filter=^%s$' %
       line, '--benchmark_out=%s.%s.%s.%s.%d.json' %
       (bm, stripped_line, cfg, name, idx), '--benchmark_out_format=json',
-      '--benchmark_repetitions=%d' % (reps)
     ]
     jobs_list.append(
       jobset.JobSpec(
@@ -109,22 +95,25 @@ def _collect_bm_data(bm, cfg, name, reps, idx, loops):
         shortname='%s %s %s %s %d/%d' % (bm, line, cfg, name, idx + 1,
                          loops),
         verbose_success=True,
+        cpu_cost=2,
         timeout_seconds=60 * 60)) # one hour
   return jobs_list
 
 
-def run(name, benchmarks, jobs, loops, reps, counters):
+def create_jobs(name, benchmarks, loops, regex, counters):
   jobs_list = []
   for loop in range(0, loops):
     for bm in benchmarks:
-      jobs_list += _collect_bm_data(bm, 'opt', name, reps, loop, loops)
+      jobs_list += _collect_bm_data(bm, 'opt', name, regex, loop, loops)
       if counters:
-        jobs_list += _collect_bm_data(bm, 'counters', name, reps, loop,
+        jobs_list += _collect_bm_data(bm, 'counters', name, regex, loop,
                         loops)
   random.shuffle(jobs_list, random.SystemRandom().random)
-  jobset.run(jobs_list, maxjobs=jobs)
+  return jobs_list
 
 
 if __name__ == '__main__':
   args = _args()
-  run(args.name, args.benchmarks, args.jobs, args.loops, args.repetitions, args.counters)
+  jobs_list = create_jobs(args.name, args.benchmarks, args.loops, 
+                          args.regex, args.counters)
+  jobset.run(jobs_list, maxjobs=args.jobs)

@@ -1,31 +1,16 @@
-# Copyright 2016, Google Inc.
-# All rights reserved.
+# Copyright 2016 gRPC authors.
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are
-# met:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-#     * Redistributions of source code must retain the above copyright
-# notice, this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above
-# copyright notice, this list of conditions and the following disclaimer
-# in the documentation and/or other materials provided with the
-# distribution.
-#     * Neither the name of Google Inc. nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 #
 # This is for the gRPC build system. This isn't intended to be used outsite of
@@ -38,24 +23,49 @@
 # each change must be ported from one to the other.
 #
 
+def _get_external_deps(external_deps):
+  ret = []
+  for dep in external_deps:
+    if dep == "nanopb":
+      ret.append("//third_party/nanopb")
+    else:
+      ret.append("//external:" + dep)
+  return ret
+
+def _maybe_update_cc_library_hdrs(hdrs):
+  ret = []
+  hdrs_to_update = {
+      "third_party/objective_c/Cronet/bidirectional_stream_c.h": "//third_party:objective_c/Cronet/bidirectional_stream_c.h",
+  }
+  for h in hdrs:
+    if h in hdrs_to_update.keys():
+      ret.append(hdrs_to_update[h])
+    else:
+      ret.append(h)
+  return ret
+
 def grpc_cc_library(name, srcs = [], public_hdrs = [], hdrs = [],
                     external_deps = [], deps = [], standalone = False,
-                    language = "C++", testonly = False, visibility = None):
+                    language = "C++", testonly = False, visibility = None,
+                    alwayslink = 0):
   copts = []
   if language.upper() == "C":
     copts = ["-std=c99"]
   native.cc_library(
     name = name,
     srcs = srcs,
-    hdrs = hdrs + public_hdrs,
-    deps = deps + ["//external:" + dep for dep in external_deps],
+    defines = select({"//:grpc_no_ares": ["GRPC_ARES=0"],
+                      "//conditions:default": [],}),
+    hdrs = _maybe_update_cc_library_hdrs(hdrs + public_hdrs),
+    deps = deps + _get_external_deps(external_deps),
     copts = copts,
     visibility = visibility,
     testonly = testonly,
     linkopts = ["-pthread"],
     includes = [
         "include"
-    ]
+    ],
+    alwayslink = alwayslink,
   )
 
 def grpc_proto_plugin(name, srcs = [], deps = []):
@@ -67,7 +77,7 @@ def grpc_proto_plugin(name, srcs = [], deps = []):
 
 load("//:bazel/cc_grpc_library.bzl", "cc_grpc_library")
 
-def grpc_proto_library(name, srcs = [], deps = [], well_known_protos = None,
+def grpc_proto_library(name, srcs = [], deps = [], well_known_protos = False,
                        has_services = True, use_external = False, generate_mock = False):
   cc_grpc_library(
     name = name,
@@ -88,12 +98,12 @@ def grpc_cc_test(name, srcs = [], deps = [], external_deps = [], args = [], data
     srcs = srcs,
     args = args,
     data = data,
-    deps = deps + ["//external:" + dep for dep in external_deps],
+    deps = deps + _get_external_deps(external_deps),
     copts = copts,
     linkopts = ["-pthread"],
   )
 
-def grpc_cc_binary(name, srcs = [], deps = [], external_deps = [], args = [], data = [], language = "C++", testonly = False, linkshared = False):
+def grpc_cc_binary(name, srcs = [], deps = [], external_deps = [], args = [], data = [], language = "C++", testonly = False, linkshared = False, linkopts = []):
   copts = []
   if language.upper() == "C":
     copts = ["-std=c99"]
@@ -104,17 +114,49 @@ def grpc_cc_binary(name, srcs = [], deps = [], external_deps = [], args = [], da
     data = data,
     testonly = testonly,
     linkshared = linkshared,
-    deps = deps + ["//external:" + dep for dep in external_deps],
+    deps = deps + _get_external_deps(external_deps),
     copts = copts,
-    linkopts = ["-pthread"],
+    linkopts = ["-pthread"] + linkopts,
   )
 
 def grpc_generate_one_off_targets():
-    pass
+  pass
 
 def grpc_sh_test(name, srcs, args = [], data = []):
-    native.sh_test(
-        name = name,
-        srcs = srcs,
-        args = args,
-        data = data)
+  native.sh_test(
+    name = name,
+    srcs = srcs,
+    args = args,
+    data = data)
+
+def grpc_sh_binary(name, srcs, data = []):
+  native.sh_test(
+    name = name,
+    srcs = srcs,
+    data = data)
+
+def grpc_py_binary(name, srcs, data = [], deps = []):
+  if name == "test_dns_server":
+    # TODO: allow running test_dns_server in oss bazel test suite
+    deps = []
+  native.py_binary(
+    name = name,
+    srcs = srcs,
+    data = data,
+    deps = deps)
+
+def grpc_package(name, visibility = "private", features = []):
+  if visibility == "tests":
+    visibility = ["//test:__subpackages__"]
+  elif visibility == "public":
+    visibility = ["//visibility:public"]
+  elif visibility == "private":
+    visibility = []
+  else:
+    fail("Unknown visibility " + visibility)
+
+  if len(visibility) != 0:
+    native.package(
+      default_visibility = visibility,
+      features = features
+    )

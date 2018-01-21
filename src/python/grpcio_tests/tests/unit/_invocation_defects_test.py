@@ -1,31 +1,16 @@
-# Copyright 2016, Google Inc.
-# All rights reserved.
+# Copyright 2016 gRPC authors.
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are
-# met:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-#     * Redistributions of source code must retain the above copyright
-# notice, this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above
-# copyright notice, this list of conditions and the following disclaimer
-# in the documentation and/or other materials provided with the
-# distribution.
-#     * Neither the name of Google Inc. nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import itertools
 import threading
@@ -47,6 +32,7 @@ _UNARY_UNARY = '/test/UnaryUnary'
 _UNARY_STREAM = '/test/UnaryStream'
 _STREAM_UNARY = '/test/StreamUnary'
 _STREAM_STREAM = '/test/StreamStream'
+_DEFECTIVE_GENERIC_RPC_HANDLER = '/test/DefectiveGenericRpcHandler'
 
 
 class _Callback(object):
@@ -110,6 +96,9 @@ class _Handler(object):
             yield request
         self._control.control()
 
+    def defective_generic_rpc_handler(self):
+        raise test_control.Defect()
+
 
 class _MethodHandler(grpc.RpcMethodHandler):
 
@@ -147,6 +136,8 @@ class _GenericHandler(grpc.GenericRpcHandler):
         elif handler_call_details.method == _STREAM_STREAM:
             return _MethodHandler(True, True, None, None, None, None, None,
                                   self._handler.handle_stream_stream)
+        elif handler_call_details.method == _DEFECTIVE_GENERIC_RPC_HANDLER:
+            return self._handler.defective_generic_rpc_handler()
         else:
             return None
 
@@ -189,6 +180,10 @@ def _stream_unary_multi_callable(channel):
 
 def _stream_stream_multi_callable(channel):
     return channel.stream_stream(_STREAM_STREAM)
+
+
+def _defective_handler_multi_callable(channel):
+    return channel.unary_unary(_DEFECTIVE_GENERIC_RPC_HANDLER)
 
 
 class InvocationDefectsTest(unittest.TestCase):
@@ -249,6 +244,18 @@ class InvocationDefectsTest(unittest.TestCase):
         with self.assertRaises(grpc.RpcError):
             for _ in range(test_constants.STREAM_LENGTH // 2 + 1):
                 next(response_iterator)
+
+    def testDefectiveGenericRpcHandlerUnaryResponse(self):
+        request = b'\x07\x08'
+        multi_callable = _defective_handler_multi_callable(self._channel)
+
+        with self.assertRaises(grpc.RpcError) as exception_context:
+            response = multi_callable(
+                request,
+                metadata=(('test', 'DefectiveGenericRpcHandlerUnary'),))
+
+        self.assertIs(grpc.StatusCode.UNKNOWN,
+                      exception_context.exception.code())
 
 
 if __name__ == '__main__':

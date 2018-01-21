@@ -1,38 +1,24 @@
 /*
  *
- * Copyright 2015, Google Inc.
- * All rights reserved.
+ * Copyright 2015 gRPC authors.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  */
 
 #import <UIKit/UIKit.h>
 #import <XCTest/XCTest.h>
+#import <grpc/grpc.h>
 
 #import <GRPCClient/GRPCCall.h>
 #import <GRPCClient/GRPCCall+ChannelArg.h>
@@ -43,6 +29,9 @@
 #import <RemoteTest/Messages.pbobjc.h>
 #import <RxLibrary/GRXWriteable.h>
 #import <RxLibrary/GRXWriter+Immediate.h>
+#import <RxLibrary/GRXBufferedPipe.h>
+
+#import "version.h"
 
 #define TEST_TIMEOUT 16
 
@@ -54,6 +43,7 @@ static NSString * const kRemoteSSLHost = @"grpc-test.sandbox.googleapis.com";
 static GRPCProtoMethod *kInexistentMethod;
 static GRPCProtoMethod *kEmptyCallMethod;
 static GRPCProtoMethod *kUnaryCallMethod;
+static GRPCProtoMethod *kFullDuplexCallMethod;
 
 /** Observer class for testing that responseMetadata is KVO-compliant */
 @interface PassthroughObserver : NSObject
@@ -121,6 +111,9 @@ static GRPCProtoMethod *kUnaryCallMethod;
   kUnaryCallMethod = [[GRPCProtoMethod alloc] initWithPackage:kPackage
                                                       service:kService
                                                        method:@"UnaryCall"];
+  kFullDuplexCallMethod = [[GRPCProtoMethod alloc] initWithPackage:kPackage
+                                                           service:kService
+                                                            method:@"FullDuplexCall"];
 }
 
 - (void)testConnectionToRemoteServer {
@@ -276,12 +269,38 @@ static GRPCProtoMethod *kUnaryCallMethod;
   id<GRXWriteable> responsesWriteable = [[GRXWriteable alloc] initWithValueHandler:^(NSData *value) {
     XCTAssertNotNil(value, @"nil value received as response.");
     XCTAssertEqual([value length], 0, @"Non-empty response received: %@", value);
-    /* This test needs to be more clever in regards to changing the version of the core.
-    XCTAssertEqualObjects(call.responseHeaders[@"x-grpc-test-echo-useragent"],
-                          @"Foo grpc-objc/0.13.0 grpc-c/0.14.0-dev (ios)",
-                          @"Did not receive expected user agent %@",
-                          call.responseHeaders[@"x-grpc-test-echo-useragent"]);
-    */
+
+    NSString *userAgent = call.responseHeaders[@"x-grpc-test-echo-useragent"];
+    NSError *error = nil;
+
+    // Test the regex is correct
+    NSString *expectedUserAgent = @"Foo grpc-objc/";
+    expectedUserAgent =
+        [expectedUserAgent stringByAppendingString:GRPC_OBJC_VERSION_STRING];
+    expectedUserAgent =
+        [expectedUserAgent stringByAppendingString:@" grpc-c/"];
+    expectedUserAgent =
+        [expectedUserAgent stringByAppendingString:GRPC_C_VERSION_STRING];
+    expectedUserAgent =
+        [expectedUserAgent stringByAppendingString:@" (ios; chttp2; "];
+    expectedUserAgent =
+        [expectedUserAgent stringByAppendingString:[NSString stringWithUTF8String:grpc_g_stands_for()]];
+    expectedUserAgent = [expectedUserAgent stringByAppendingString:@")"];
+    XCTAssertEqualObjects(userAgent, expectedUserAgent);
+
+    // Change in format of user-agent field in a direction that does not match the regex will likely
+    // cause problem for certain gRPC users. For details, refer to internal doc https://goo.gl/c2diBc
+    NSRegularExpression *regex =
+        [NSRegularExpression regularExpressionWithPattern:@" grpc-[a-zA-Z0-9]+(-[a-zA-Z0-9]+)?/[^ ,]+( \\([^)]*\\))?"
+                                                  options:0
+                                                    error:&error];
+    NSString *customUserAgent =
+        [regex stringByReplacingMatchesInString:userAgent
+                                        options:0
+                                          range:NSMakeRange(0, [userAgent length])
+                                   withTemplate:@""];
+    XCTAssertEqualObjects(customUserAgent, @"Foo");
+
     [response fulfill];
   } completionHandler:^(NSError *errorOrNil) {
     XCTAssertNil(errorOrNil, @"Finished with unexpected error: %@", errorOrNil);
@@ -433,6 +452,28 @@ static GRPCProtoMethod *kUnaryCallMethod;
   }];
 
   [call2 startWithWriteable:responsesWriteable2];
+
+  [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
+}
+
+- (void)testTimeout {
+  __weak XCTestExpectation *completion = [self expectationWithDescription:@"RPC completed."];
+
+  GRXBufferedPipe *pipe = [GRXBufferedPipe pipe];
+  GRPCCall *call = [[GRPCCall alloc] initWithHost:kHostAddress
+                                             path:kFullDuplexCallMethod.HTTPPath
+                                   requestsWriter:pipe];
+
+  id<GRXWriteable> responsesWriteable = [[GRXWriteable alloc] initWithValueHandler:^(NSData *value) {
+    XCTAssert(0, @"Failure: response received; Expect: no response received.");
+  } completionHandler:^(NSError *errorOrNil) {
+    XCTAssertNotNil(errorOrNil, @"Failure: no error received; Expect: receive deadline exceeded.");
+    XCTAssertEqual(errorOrNil.code, GRPCErrorCodeDeadlineExceeded);
+    [completion fulfill];
+  }];
+
+  call.timeout = 0.001;
+  [call startWithWriteable:responsesWriteable];
 
   [self waitForExpectationsWithTimeout:TEST_TIMEOUT handler:nil];
 }

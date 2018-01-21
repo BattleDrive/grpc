@@ -1,32 +1,17 @@
 #!/usr/bin/env python
-# Copyright 2015, Google Inc.
-# All rights reserved.
+# Copyright 2015 gRPC authors.
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are
-# met:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-#     * Redistributions of source code must retain the above copyright
-# notice, this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above
-# copyright notice, this list of conditions and the following disclaimer
-# in the documentation and/or other materials provided with the
-# distribution.
-#     * Neither the name of Google Inc. nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Run interop (cross-language) tests in parallel."""
 
@@ -50,6 +35,11 @@ import traceback
 import python_utils.dockerjob as dockerjob
 import python_utils.jobset as jobset
 import python_utils.report_utils as report_utils
+# It's ok to not import because this is only necessary to upload results to BQ.
+try:
+  from python_utils.upload_test_results import upload_interop_results_to_bq
+except ImportError as e:
+  print(e)
 
 # Docker doesn't clean up after itself, so we do it on exit.
 atexit.register(lambda: subprocess.call(['stty', 'echo']))
@@ -77,6 +67,13 @@ _TEST_TIMEOUT = 3*60
 # disable this test on core-based languages,
 # see https://github.com/grpc/grpc/issues/9779
 _SKIP_DATA_FRAME_PADDING = ['data_frame_padding']
+
+# report suffix is important for reports to get picked up by internal CI
+_INTERNAL_CL_XML_REPORT = 'sponge_log.xml'
+
+# report suffix is important for reports to get picked up by internal CI
+_XML_REPORT = 'report.xml'
+
 
 class CXXLanguage:
 
@@ -193,13 +190,35 @@ class JavaLanguage:
     return {}
 
   def unimplemented_test_cases(self):
-    return _SKIP_COMPRESSION
+    return []
 
   def unimplemented_test_cases_server(self):
     return _SKIP_COMPRESSION
 
   def __str__(self):
     return 'java'
+
+
+class JavaOkHttpClient:
+
+  def __init__(self):
+    self.client_cwd = '../grpc-java'
+    self.safename = 'java'
+
+  def client_cmd(self, args):
+    return ['./run-test-client.sh', '--use_okhttp=true'] + args
+
+  def cloud_to_prod_env(self):
+    return {}
+
+  def global_env(self):
+    return {}
+
+  def unimplemented_test_cases(self):
+    return _SKIP_DATA_FRAME_PADDING
+
+  def __str__(self):
+    return 'javaokhttp'
 
 
 class GoLanguage:
@@ -294,20 +313,22 @@ class Http2Client:
 class NodeLanguage:
 
   def __init__(self):
-    self.client_cwd = None
-    self.server_cwd = None
+    self.client_cwd = '../grpc-node'
+    self.server_cwd = '../grpc-node'
     self.safename = str(self)
 
   def client_cmd(self, args):
-    return ['tools/run_tests/interop/with_nvm.sh',
-            'node', 'src/node/interop/interop_client.js'] + args
+    return ['packages/grpc-native-core/deps/grpc/tools/run_tests/interop/with_nvm.sh',
+            'node', '--require', './test/fixtures/native_native',
+            'test/interop/interop_client.js'] + args
 
   def cloud_to_prod_env(self):
     return {}
 
   def server_cmd(self, args):
-    return ['tools/run_tests/interop/with_nvm.sh',
-            'node', 'src/node/interop/interop_server.js'] + args
+    return ['packages/grpc-native-core/deps/grpc/tools/run_tests/interop/with_nvm.sh',
+            'node', '--require', './test/fixtures/native_native',
+            'test/interop/interop_server.js'] + args
 
   def global_env(self):
     return {}
@@ -489,6 +510,7 @@ _LANGUAGES = {
     'csharpcoreclr' : CSharpCoreCLRLanguage(),
     'go' : GoLanguage(),
     'java' : JavaLanguage(),
+    'javaokhttp' : JavaOkHttpClient(),
     'node' : NodeLanguage(),
     'php' :  PHPLanguage(),
     'php7' :  PHP7Language(),
@@ -552,6 +574,7 @@ def manual_cmdline(docker_cmdline, docker_image):
       continue
     if item == docker_image:
       item = "$docker_image"
+    item = item.replace('"', '\\"')
     # add quotes when necessary
     if any(character.isspace() for character in item):
       item = "\"%s\"" % item
@@ -657,10 +680,10 @@ def cloud_to_prod_jobspec(language, test_case, server_host_name,
           cmdline=cmdline,
           cwd=cwd,
           environ=environ,
-          shortname='%s:%s:%s:%s' % (suite_name, server_host_name, language,
+          shortname='%s:%s:%s:%s' % (suite_name, language, server_host_name,
                                      test_case),
           timeout_seconds=_TEST_TIMEOUT,
-          flake_retries=5 if args.allow_flakes else 0,
+          flake_retries=4 if args.allow_flakes else 0,
           timeout_retries=2 if args.allow_flakes else 0,
           kill_handler=_job_kill_handler)
   if docker_image:
@@ -716,7 +739,7 @@ def cloud_to_cloud_jobspec(language, test_case, server_name, server_host,
     if manual_cmd_log is not None:
       if manual_cmd_log == []:
         manual_cmd_log.append('echo "Testing ${docker_image:=%s}"' % docker_image)
-      manual_cmd_log.append(manual_cmdline(cmdline, docker_iamge))
+      manual_cmd_log.append(manual_cmdline(cmdline, docker_image))
     cwd = None
 
   test_job = jobset.JobSpec(
@@ -726,7 +749,7 @@ def cloud_to_cloud_jobspec(language, test_case, server_name, server_host,
           shortname='cloud_to_cloud:%s:%s_server:%s' % (language, server_name,
                                                         test_case),
           timeout_seconds=_TEST_TIMEOUT,
-          flake_retries=5 if args.allow_flakes else 0,
+          flake_retries=4 if args.allow_flakes else 0,
           timeout_retries=2 if args.allow_flakes else 0,
           kill_handler=_job_kill_handler)
   if docker_image:
@@ -778,7 +801,7 @@ def server_jobspec(language, docker_image, insecure=False, manual_cmd_log=None):
   if manual_cmd_log is not None:
       if manual_cmd_log == []:
         manual_cmd_log.append('echo "Testing ${docker_image:=%s}"' % docker_image)
-      manual_cmd_log.append(manual_cmdline(docker_cmdline, docker_iamge))
+      manual_cmd_log.append(manual_cmdline(docker_cmdline, docker_image))
   server_job = jobset.JobSpec(
           cmdline=docker_cmdline,
           environ=environ,
@@ -935,7 +958,17 @@ argp.add_argument('--insecure',
                   action='store_const',
                   const=True,
                   help='Whether to use secure channel.')
-
+argp.add_argument('--internal_ci',
+                  default=False,
+                  action='store_const',
+                  const=True,
+                  help=('Put reports into subdirectories to improve '
+                        'presentation of results by Internal CI.'))
+argp.add_argument('--bq_result_table',
+                  default='',
+                  type=str,
+                  nargs='?',
+                  help='Upload test results to a specified BQ table.')
 args = argp.parse_args()
 
 servers = set(s for s in itertools.chain.from_iterable(_SERVERS
@@ -1185,6 +1218,8 @@ try:
   num_failures, resultset = jobset.run(jobs, newline_on_success=True,
                                        maxjobs=args.jobs,
                                        skip_jobs=args.manual_run)
+  if args.bq_result_table and resultset:
+    upload_interop_results_to_bq(resultset, args.bq_result_table, args)
   if num_failures:
     jobset.message('FAILED', 'Some tests failed', do_newline=True)
   else:
@@ -1193,7 +1228,10 @@ try:
   write_cmdlog_maybe(server_manual_cmd_log, 'interop_server_cmds.sh')
   write_cmdlog_maybe(client_manual_cmd_log, 'interop_client_cmds.sh')
 
-  report_utils.render_junit_xml_report(resultset, 'report.xml')
+  xml_report_name = _XML_REPORT
+  if args.internal_ci:
+    xml_report_name = _INTERNAL_CL_XML_REPORT
+  report_utils.render_junit_xml_report(resultset, xml_report_name)
 
   for name, job in resultset.items():
     if "http2" in name:
@@ -1207,6 +1245,11 @@ try:
       _HTTP2_TEST_CASES, http2_server_test_cases, resultset, num_failures,
       args.cloud_to_prod_auth or args.cloud_to_prod, args.prod_servers,
       args.http2_interop)
+
+  if num_failures:
+    sys.exit(1)
+  else:
+    sys.exit(0)
 except Exception as e:
   print('exception occurred:')
   traceback.print_exc(file=sys.stdout)

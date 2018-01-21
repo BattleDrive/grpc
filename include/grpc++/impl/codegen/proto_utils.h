@@ -1,33 +1,18 @@
 /*
  *
- * Copyright 2015, Google Inc.
- * All rights reserved.
+ * Copyright 2015 gRPC authors.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  */
 
@@ -56,8 +41,11 @@ const int kGrpcBufferWriterMaxBufferLength = 1024 * 1024;
 
 class GrpcBufferWriter : public ::grpc::protobuf::io::ZeroCopyOutputStream {
  public:
-  explicit GrpcBufferWriter(grpc_byte_buffer** bp, int block_size)
-      : block_size_(block_size), byte_count_(0), have_backup_(false) {
+  GrpcBufferWriter(grpc_byte_buffer** bp, int block_size, int total_size)
+      : block_size_(block_size),
+        total_size_(total_size),
+        byte_count_(0),
+        have_backup_(false) {
     *bp = g_core_codegen_interface->grpc_raw_byte_buffer_create(NULL, 0);
     slice_buffer_ = &(*bp)->data.raw.slice_buffer;
   }
@@ -69,11 +57,20 @@ class GrpcBufferWriter : public ::grpc::protobuf::io::ZeroCopyOutputStream {
   }
 
   bool Next(void** data, int* size) override {
+    // Protobuf should not ask for more memory than total_size_.
+    GPR_CODEGEN_ASSERT(byte_count_ < total_size_);
     if (have_backup_) {
       slice_ = backup_slice_;
       have_backup_ = false;
     } else {
-      slice_ = g_core_codegen_interface->grpc_slice_malloc(block_size_);
+      // When less than a whole block is needed, only allocate that much.
+      // But make sure the allocated slice is not inlined.
+      size_t remain = total_size_ - byte_count_ > block_size_
+                          ? block_size_
+                          : total_size_ - byte_count_;
+      slice_ = g_core_codegen_interface->grpc_slice_malloc(
+          remain > GRPC_SLICE_INLINED_SIZE ? remain
+                                           : GRPC_SLICE_INLINED_SIZE + 1);
     }
     *data = GRPC_SLICE_START_PTR(slice_);
     // On win x64, int is only 32bit
@@ -85,7 +82,7 @@ class GrpcBufferWriter : public ::grpc::protobuf::io::ZeroCopyOutputStream {
 
   void BackUp(int count) override {
     g_core_codegen_interface->grpc_slice_buffer_pop(slice_buffer_);
-    if (count == block_size_) {
+    if ((size_t)count == GRPC_SLICE_LENGTH(slice_)) {
       backup_slice_ = slice_;
     } else {
       backup_slice_ = g_core_codegen_interface->grpc_slice_split_tail(
@@ -102,11 +99,10 @@ class GrpcBufferWriter : public ::grpc::protobuf::io::ZeroCopyOutputStream {
 
   grpc::protobuf::int64 ByteCount() const override { return byte_count_; }
 
-  grpc_slice_buffer* SliceBuffer() { return slice_buffer_; }
-
- private:
+ protected:
   friend class GrpcBufferWriterPeer;
   const int block_size_;
+  const int total_size_;
   int64_t byte_count_;
   grpc_slice_buffer* slice_buffer_;
   bool have_backup_;
@@ -183,6 +179,7 @@ class GrpcBufferReader : public ::grpc::protobuf::io::ZeroCopyInputStream {
   Status status_;
 };
 
+// BufferWriter must be a subclass of io::ZeroCopyOutputStream.
 template <class BufferWriter, class T>
 Status GenericSerialize(const grpc::protobuf::Message& msg,
                         grpc_byte_buffer** bp, bool* own_buffer) {
@@ -191,22 +188,23 @@ Status GenericSerialize(const grpc::protobuf::Message& msg,
       "BufferWriter must be a subclass of io::ZeroCopyOutputStream");
   *own_buffer = true;
   int byte_size = msg.ByteSize();
-  if (byte_size <= internal::kGrpcBufferWriterMaxBufferLength) {
+  if ((size_t)byte_size <= GRPC_SLICE_INLINED_SIZE) {
     grpc_slice slice = g_core_codegen_interface->grpc_slice_malloc(byte_size);
     GPR_CODEGEN_ASSERT(
         GRPC_SLICE_END_PTR(slice) ==
         msg.SerializeWithCachedSizesToArray(GRPC_SLICE_START_PTR(slice)));
     *bp = g_core_codegen_interface->grpc_raw_byte_buffer_create(&slice, 1);
     g_core_codegen_interface->grpc_slice_unref(slice);
+
     return g_core_codegen_interface->ok();
-  } else {
-    BufferWriter writer(bp, internal::kGrpcBufferWriterMaxBufferLength);
-    return msg.SerializeToZeroCopyStream(&writer)
-               ? g_core_codegen_interface->ok()
-               : Status(StatusCode::INTERNAL, "Failed to serialize message");
   }
+  BufferWriter writer(bp, kGrpcBufferWriterMaxBufferLength, byte_size);
+  return msg.SerializeToZeroCopyStream(&writer)
+             ? g_core_codegen_interface->ok()
+             : Status(StatusCode::INTERNAL, "Failed to serialize message");
 }
 
+// BufferReader must be a subclass of io::ZeroCopyInputStream.
 template <class BufferReader, class T>
 Status GenericDeserialize(grpc_byte_buffer* buffer,
                           grpc::protobuf::Message* msg) {

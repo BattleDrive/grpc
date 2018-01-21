@@ -1,32 +1,17 @@
 #!/usr/bin/env python
-# Copyright 2016, Google Inc.
-# All rights reserved.
+# Copyright 2016 gRPC authors.
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are
-# met:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-#     * Redistributions of source code must retain the above copyright
-# notice, this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above
-# copyright notice, this list of conditions and the following disclaimer
-# in the documentation and/or other materials provided with the
-# distribution.
-#     * Neither the name of Google Inc. nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Definition of targets to build artifacts."""
 
@@ -163,10 +148,9 @@ class PythonArtifact:
       return create_jobspec(self.name,
                             ['tools\\run_tests\\artifacts\\build_artifact_python.bat',
                              self.py_version,
-                             '32' if self.arch == 'x86' else '64',
-                             dir
-                            ],
+                             '32' if self.arch == 'x86' else '64'],
                             environ=environ,
+                            timeout_seconds=45*60,
                             use_workspace=True)
     else:
       environ['PYTHON'] = self.py_version
@@ -174,6 +158,7 @@ class PythonArtifact:
       return create_jobspec(self.name,
                             ['tools/run_tests/artifacts/build_artifact_python.sh'],
                             environ=environ,
+                            timeout_seconds=60*60,
                             use_workspace=True)
 
   def __str__(self):
@@ -197,7 +182,8 @@ class RubyArtifact:
     # We are using a custom workspace instead.
     return create_jobspec(self.name,
                           ['tools/run_tests/artifacts/build_artifact_ruby.sh'],
-                          use_workspace=True)
+                          use_workspace=True,
+                          timeout_seconds=45*60)
 
 
 class CSharpExtArtifact:
@@ -243,49 +229,6 @@ class CSharpExtArtifact:
 
   def __str__(self):
     return self.name
-
-
-node_gyp_arch_map = {
-  'x86': 'ia32',
-  'x64': 'x64'
-}
-
-class NodeExtArtifact:
-  """Builds Node native extension"""
-
-  def __init__(self, platform, arch):
-    self.name = 'node_ext_{0}_{1}'.format(platform, arch)
-    self.platform = platform
-    self.arch = arch
-    self.gyp_arch = node_gyp_arch_map[arch]
-    self.labels = ['artifact', 'node', platform, arch]
-
-  def pre_build_jobspecs(self):
-    return []
-
-  def build_jobspec(self):
-    if self.platform == 'windows':
-      # Simultaneous builds of node on the same windows machine are flaky.
-      # Set x86 build as exclusive to make sure there is only one node build
-      # at a time. See https://github.com/grpc/grpc/issues/8293
-      cpu_cost = 1e6 if self.arch != 'x64' else 1.0
-      return create_jobspec(self.name,
-                            ['tools\\run_tests\\artifacts\\build_artifact_node.bat',
-                             self.gyp_arch],
-                            use_workspace=True,
-                            cpu_cost=cpu_cost)
-    else:
-      if self.platform == 'linux':
-        return create_docker_jobspec(
-            self.name,
-            'tools/dockerfile/grpc_artifact_linux_{}'.format(self.arch),
-            'tools/run_tests/artifacts/build_artifact_node.sh {} {}'.format(
-                self.gyp_arch, self.platform))
-      else:
-        return create_jobspec(self.name,
-                              ['tools/run_tests/artifacts/build_artifact_node.sh',
-                               self.gyp_arch, self.platform],
-                               use_workspace=True)
 
 class PHPArtifact:
   """Builds PHP PECL package"""
@@ -344,12 +287,10 @@ class ProtocArtifact:
             environ=environ,
             use_workspace=True)
     else:
-      generator = 'Visual Studio 12 Win64' if self.arch == 'x64' else 'Visual Studio 12'
-      vcplatform = 'x64' if self.arch == 'x64' else 'Win32'
+      generator = 'Visual Studio 14 2015 Win64' if self.arch == 'x64' else 'Visual Studio 14 2015'
       return create_jobspec(self.name,
                             ['tools\\run_tests\\artifacts\\build_artifact_protoc.bat'],
-                            environ={'generator': generator,
-                                     'Platform': vcplatform},
+                            environ={'generator': generator},
                             use_workspace=True)
 
   def __str__(self):
@@ -359,7 +300,7 @@ class ProtocArtifact:
 def targets():
   """Gets list of supported targets"""
   return ([Cls(platform, arch)
-           for Cls in (CSharpExtArtifact, NodeExtArtifact, ProtocArtifact)
+           for Cls in (CSharpExtArtifact, ProtocArtifact)
            for platform in ('linux', 'macos', 'windows')
            for arch in ('x86', 'x64')] +
           [PythonArtifact('linux', 'x86', 'cp27-cp27m'),

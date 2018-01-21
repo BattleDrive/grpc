@@ -1,31 +1,16 @@
-# Copyright 2015, Google Inc.
-# All rights reserved.
+# Copyright 2015 gRPC authors.
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are
-# met:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-#     * Redistributions of source code must retain the above copyright
-# notice, this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above
-# copyright notice, this list of conditions and the following disclaimer
-# in the documentation and/or other materials provided with the
-# distribution.
-#     * Neither the name of Google Inc. nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import time
 import threading
@@ -43,55 +28,12 @@ _CALL_CREDENTIALS_METADATA_VALUE = 'call-creds-value'
 _EMPTY_FLAGS = 0
 
 
-def _metadata_plugin_callback(context, callback):
-    callback(
-        cygrpc.Metadata([
-            cygrpc.Metadatum(_CALL_CREDENTIALS_METADATA_KEY,
-                             _CALL_CREDENTIALS_METADATA_VALUE)
-        ]), cygrpc.StatusCode.ok, b'')
+def _metadata_plugin(context, callback):
+    callback(((_CALL_CREDENTIALS_METADATA_KEY,
+               _CALL_CREDENTIALS_METADATA_VALUE,),), cygrpc.StatusCode.ok, b'')
 
 
 class TypeSmokeTest(unittest.TestCase):
-
-    def testStringsInUtilitiesUpDown(self):
-        self.assertEqual(0, cygrpc.StatusCode.ok)
-        metadatum = cygrpc.Metadatum(b'a', b'b')
-        self.assertEqual(b'a', metadatum.key)
-        self.assertEqual(b'b', metadatum.value)
-        metadata = cygrpc.Metadata([metadatum])
-        self.assertEqual(1, len(metadata))
-        self.assertEqual(metadatum.key, metadata[0].key)
-
-    def testMetadataIteration(self):
-        metadata = cygrpc.Metadata(
-            [cygrpc.Metadatum(b'a', b'b'), cygrpc.Metadatum(b'c', b'd')])
-        iterator = iter(metadata)
-        metadatum = next(iterator)
-        self.assertIsInstance(metadatum, cygrpc.Metadatum)
-        self.assertEqual(metadatum.key, b'a')
-        self.assertEqual(metadatum.value, b'b')
-        metadatum = next(iterator)
-        self.assertIsInstance(metadatum, cygrpc.Metadatum)
-        self.assertEqual(metadatum.key, b'c')
-        self.assertEqual(metadatum.value, b'd')
-        with self.assertRaises(StopIteration):
-            next(iterator)
-
-    def testOperationsIteration(self):
-        operations = cygrpc.Operations(
-            [cygrpc.operation_send_message(b'asdf', _EMPTY_FLAGS)])
-        iterator = iter(operations)
-        operation = next(iterator)
-        self.assertIsInstance(operation, cygrpc.Operation)
-        # `Operation`s are write-only structures; can't directly debug anything out
-        # of them. Just check that we stop iterating.
-        with self.assertRaises(StopIteration):
-            next(iterator)
-
-    def testOperationFlags(self):
-        operation = cygrpc.operation_send_message(b'asdf',
-                                                  cygrpc.WriteFlag.no_compress)
-        self.assertEqual(cygrpc.WriteFlag.no_compress, operation.flags)
 
     def testTimespec(self):
         now = time.time()
@@ -120,17 +62,9 @@ class TypeSmokeTest(unittest.TestCase):
         channel = cygrpc.Channel(b'[::]:0', cygrpc.ChannelArgs([]))
         del channel
 
-    def testCredentialsMetadataPluginUpDown(self):
-        plugin = cygrpc.CredentialsMetadataPlugin(
-            lambda ignored_a, ignored_b: None, b'')
-        del plugin
-
-    def testCallCredentialsFromPluginUpDown(self):
-        plugin = cygrpc.CredentialsMetadataPlugin(_metadata_plugin_callback,
-                                                  b'')
-        call_credentials = cygrpc.call_credentials_metadata_plugin(plugin)
-        del plugin
-        del call_credentials
+    def test_metadata_plugin_call_credentials_up_down(self):
+        cygrpc.MetadataPluginCallCredentials(_metadata_plugin,
+                                             b'test plugin name!')
 
     def testServerStartNoExplicitShutdown(self):
         server = cygrpc.Server(cygrpc.ChannelArgs([]))
@@ -205,8 +139,7 @@ class ServerClientMixin(object):
         def performer():
             tag = object()
             try:
-                call_result = call.start_client_batch(
-                    cygrpc.Operations(operations), tag)
+                call_result = call.start_client_batch(operations, tag)
                 self.assertEqual(cygrpc.CallError.ok, call_result)
                 event = queue.poll(deadline)
                 self.assertEqual(cygrpc.CompletionType.operation_complete,
@@ -220,19 +153,19 @@ class ServerClientMixin(object):
 
         return test_utilities.SimpleFuture(performer)
 
-    def testEcho(self):
+    def test_echo(self):
         DEADLINE = time.time() + 5
         DEADLINE_TOLERANCE = 0.25
-        CLIENT_METADATA_ASCII_KEY = b'key'
-        CLIENT_METADATA_ASCII_VALUE = b'val'
-        CLIENT_METADATA_BIN_KEY = b'key-bin'
+        CLIENT_METADATA_ASCII_KEY = 'key'
+        CLIENT_METADATA_ASCII_VALUE = 'val'
+        CLIENT_METADATA_BIN_KEY = 'key-bin'
         CLIENT_METADATA_BIN_VALUE = b'\0' * 1000
-        SERVER_INITIAL_METADATA_KEY = b'init_me_me_me'
-        SERVER_INITIAL_METADATA_VALUE = b'whodawha?'
-        SERVER_TRAILING_METADATA_KEY = b'california_is_in_a_drought'
-        SERVER_TRAILING_METADATA_VALUE = b'zomg it is'
+        SERVER_INITIAL_METADATA_KEY = 'init_me_me_me'
+        SERVER_INITIAL_METADATA_VALUE = 'whodawha?'
+        SERVER_TRAILING_METADATA_KEY = 'california_is_in_a_drought'
+        SERVER_TRAILING_METADATA_VALUE = 'zomg it is'
         SERVER_STATUS_CODE = cygrpc.StatusCode.ok
-        SERVER_STATUS_DETAILS = b'our work is never over'
+        SERVER_STATUS_DETAILS = 'our work is never over'
         REQUEST = b'in death a member of project mayhem has a name'
         RESPONSE = b'his name is robert paulson'
         METHOD = b'twinkies'
@@ -250,19 +183,17 @@ class ServerClientMixin(object):
         client_call = self.client_channel.create_call(
             None, 0, self.client_completion_queue, METHOD, self.host_argument,
             cygrpc_deadline)
-        client_initial_metadata = cygrpc.Metadata([
-            cygrpc.Metadatum(CLIENT_METADATA_ASCII_KEY,
-                             CLIENT_METADATA_ASCII_VALUE),
-            cygrpc.Metadatum(CLIENT_METADATA_BIN_KEY, CLIENT_METADATA_BIN_VALUE)
-        ])
+        client_initial_metadata = (
+            (CLIENT_METADATA_ASCII_KEY, CLIENT_METADATA_ASCII_VALUE,),
+            (CLIENT_METADATA_BIN_KEY, CLIENT_METADATA_BIN_VALUE,),)
         client_start_batch_result = client_call.start_client_batch([
-            cygrpc.operation_send_initial_metadata(client_initial_metadata,
-                                                   _EMPTY_FLAGS),
-            cygrpc.operation_send_message(REQUEST, _EMPTY_FLAGS),
-            cygrpc.operation_send_close_from_client(_EMPTY_FLAGS),
-            cygrpc.operation_receive_initial_metadata(_EMPTY_FLAGS),
-            cygrpc.operation_receive_message(_EMPTY_FLAGS),
-            cygrpc.operation_receive_status_on_client(_EMPTY_FLAGS)
+            cygrpc.SendInitialMetadataOperation(client_initial_metadata,
+                                                _EMPTY_FLAGS),
+            cygrpc.SendMessageOperation(REQUEST, _EMPTY_FLAGS),
+            cygrpc.SendCloseFromClientOperation(_EMPTY_FLAGS),
+            cygrpc.ReceiveInitialMetadataOperation(_EMPTY_FLAGS),
+            cygrpc.ReceiveMessageOperation(_EMPTY_FLAGS),
+            cygrpc.ReceiveStatusOnClientOperation(_EMPTY_FLAGS),
         ], client_call_tag)
         self.assertEqual(cygrpc.CallError.ok, client_start_batch_result)
         client_event_future = test_utilities.CompletionQueuePollFuture(
@@ -286,21 +217,17 @@ class ServerClientMixin(object):
 
         server_call_tag = object()
         server_call = request_event.operation_call
-        server_initial_metadata = cygrpc.Metadata([
-            cygrpc.Metadatum(SERVER_INITIAL_METADATA_KEY,
-                             SERVER_INITIAL_METADATA_VALUE)
-        ])
-        server_trailing_metadata = cygrpc.Metadata([
-            cygrpc.Metadatum(SERVER_TRAILING_METADATA_KEY,
-                             SERVER_TRAILING_METADATA_VALUE)
-        ])
+        server_initial_metadata = (
+            (SERVER_INITIAL_METADATA_KEY, SERVER_INITIAL_METADATA_VALUE,),)
+        server_trailing_metadata = (
+            (SERVER_TRAILING_METADATA_KEY, SERVER_TRAILING_METADATA_VALUE,),)
         server_start_batch_result = server_call.start_server_batch([
-            cygrpc.operation_send_initial_metadata(
+            cygrpc.SendInitialMetadataOperation(
                 server_initial_metadata,
-                _EMPTY_FLAGS), cygrpc.operation_receive_message(_EMPTY_FLAGS),
-            cygrpc.operation_send_message(RESPONSE, _EMPTY_FLAGS),
-            cygrpc.operation_receive_close_on_server(_EMPTY_FLAGS),
-            cygrpc.operation_send_status_from_server(
+                _EMPTY_FLAGS), cygrpc.ReceiveMessageOperation(_EMPTY_FLAGS),
+            cygrpc.SendMessageOperation(RESPONSE, _EMPTY_FLAGS),
+            cygrpc.ReceiveCloseOnServerOperation(_EMPTY_FLAGS),
+            cygrpc.SendStatusFromServerOperation(
                 server_trailing_metadata, SERVER_STATUS_CODE,
                 SERVER_STATUS_DETAILS, _EMPTY_FLAGS)
         ], server_call_tag)
@@ -313,25 +240,24 @@ class ServerClientMixin(object):
         found_client_op_types = set()
         for client_result in client_event.batch_operations:
             # we expect each op type to be unique
-            self.assertNotIn(client_result.type, found_client_op_types)
-            found_client_op_types.add(client_result.type)
-            if client_result.type == cygrpc.OperationType.receive_initial_metadata:
+            self.assertNotIn(client_result.type(), found_client_op_types)
+            found_client_op_types.add(client_result.type())
+            if client_result.type(
+            ) == cygrpc.OperationType.receive_initial_metadata:
                 self.assertTrue(
                     test_common.metadata_transmitted(
                         server_initial_metadata,
-                        client_result.received_metadata))
-            elif client_result.type == cygrpc.OperationType.receive_message:
-                self.assertEqual(RESPONSE,
-                                 client_result.received_message.bytes())
-            elif client_result.type == cygrpc.OperationType.receive_status_on_client:
+                        client_result.initial_metadata()))
+            elif client_result.type() == cygrpc.OperationType.receive_message:
+                self.assertEqual(RESPONSE, client_result.message())
+            elif client_result.type(
+            ) == cygrpc.OperationType.receive_status_on_client:
                 self.assertTrue(
                     test_common.metadata_transmitted(
                         server_trailing_metadata,
-                        client_result.received_metadata))
-                self.assertEqual(SERVER_STATUS_DETAILS,
-                                 client_result.received_status_details)
-                self.assertEqual(SERVER_STATUS_CODE,
-                                 client_result.received_status_code)
+                        client_result.trailing_metadata()))
+                self.assertEqual(SERVER_STATUS_DETAILS, client_result.details())
+                self.assertEqual(SERVER_STATUS_CODE, client_result.code())
         self.assertEqual(
             set([
                 cygrpc.OperationType.send_initial_metadata,
@@ -345,13 +271,13 @@ class ServerClientMixin(object):
         self.assertEqual(5, len(server_event.batch_operations))
         found_server_op_types = set()
         for server_result in server_event.batch_operations:
-            self.assertNotIn(client_result.type, found_server_op_types)
-            found_server_op_types.add(server_result.type)
-            if server_result.type == cygrpc.OperationType.receive_message:
-                self.assertEqual(REQUEST,
-                                 server_result.received_message.bytes())
-            elif server_result.type == cygrpc.OperationType.receive_close_on_server:
-                self.assertFalse(server_result.received_cancelled)
+            self.assertNotIn(client_result.type(), found_server_op_types)
+            found_server_op_types.add(server_result.type())
+            if server_result.type() == cygrpc.OperationType.receive_message:
+                self.assertEqual(REQUEST, server_result.message())
+            elif server_result.type(
+            ) == cygrpc.OperationType.receive_close_on_server:
+                self.assertFalse(server_result.cancelled())
         self.assertEqual(
             set([
                 cygrpc.OperationType.send_initial_metadata,
@@ -370,7 +296,7 @@ class ServerClientMixin(object):
         METHOD = b'twinkies'
 
         cygrpc_deadline = cygrpc.Timespec(DEADLINE)
-        empty_metadata = cygrpc.Metadata([])
+        empty_metadata = ()
 
         server_request_tag = object()
         self.server.request_call(self.server_completion_queue,
@@ -387,9 +313,8 @@ class ServerClientMixin(object):
                                             cygrpc_deadline, description)
 
         client_event_future = perform_client_operations([
-            cygrpc.operation_send_initial_metadata(empty_metadata,
-                                                   _EMPTY_FLAGS),
-            cygrpc.operation_receive_initial_metadata(_EMPTY_FLAGS),
+            cygrpc.SendInitialMetadataOperation(empty_metadata, _EMPTY_FLAGS),
+            cygrpc.ReceiveInitialMetadataOperation(_EMPTY_FLAGS),
         ], "Client prologue")
 
         request_event = self.server_completion_queue.poll(cygrpc_deadline)
@@ -401,8 +326,7 @@ class ServerClientMixin(object):
                                             cygrpc_deadline, description)
 
         server_event_future = perform_server_operations([
-            cygrpc.operation_send_initial_metadata(empty_metadata,
-                                                   _EMPTY_FLAGS),
+            cygrpc.SendInitialMetadataOperation(empty_metadata, _EMPTY_FLAGS),
         ], "Server prologue")
 
         client_event_future.result()  # force completion
@@ -411,12 +335,12 @@ class ServerClientMixin(object):
         # Messaging
         for _ in range(10):
             client_event_future = perform_client_operations([
-                cygrpc.operation_send_message(b'', _EMPTY_FLAGS),
-                cygrpc.operation_receive_message(_EMPTY_FLAGS),
+                cygrpc.SendMessageOperation(b'', _EMPTY_FLAGS),
+                cygrpc.ReceiveMessageOperation(_EMPTY_FLAGS),
             ], "Client message")
             server_event_future = perform_server_operations([
-                cygrpc.operation_send_message(b'', _EMPTY_FLAGS),
-                cygrpc.operation_receive_message(_EMPTY_FLAGS),
+                cygrpc.SendMessageOperation(b'', _EMPTY_FLAGS),
+                cygrpc.ReceiveMessageOperation(_EMPTY_FLAGS),
             ], "Server receive")
 
             client_event_future.result()  # force completion
@@ -424,13 +348,13 @@ class ServerClientMixin(object):
 
         # Epilogue
         client_event_future = perform_client_operations([
-            cygrpc.operation_send_close_from_client(_EMPTY_FLAGS),
-            cygrpc.operation_receive_status_on_client(_EMPTY_FLAGS)
+            cygrpc.SendCloseFromClientOperation(_EMPTY_FLAGS),
+            cygrpc.ReceiveStatusOnClientOperation(_EMPTY_FLAGS)
         ], "Client epilogue")
 
         server_event_future = perform_server_operations([
-            cygrpc.operation_receive_close_on_server(_EMPTY_FLAGS),
-            cygrpc.operation_send_status_from_server(
+            cygrpc.ReceiveCloseOnServerOperation(_EMPTY_FLAGS),
+            cygrpc.SendStatusFromServerOperation(
                 empty_metadata, cygrpc.StatusCode.ok, b'', _EMPTY_FLAGS)
         ], "Server epilogue")
 
@@ -454,8 +378,8 @@ class SecureServerSecureClient(unittest.TestCase, ServerClientMixin):
             cygrpc.SslPemKeyCertPair(resources.private_key(),
                                      resources.certificate_chain())
         ], False)
-        client_credentials = cygrpc.channel_credentials_ssl(
-            resources.test_root_certificates(), None)
+        client_credentials = cygrpc.SSLChannelCredentials(
+            resources.test_root_certificates(), None, None)
         self.setUpMixin(server_credentials, client_credentials,
                         _SSL_HOST_OVERRIDE)
 

@@ -1,33 +1,18 @@
 /*
  *
- * Copyright 2015, Google Inc.
- * All rights reserved.
+ * Copyright 2015 gRPC authors.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  */
 
@@ -57,8 +42,8 @@ typedef struct grpc_slice grpc_slice;
    constraints (is the callee allowed to modify the slice?) */
 
 typedef struct grpc_slice_refcount_vtable {
-  void (*ref)(void *);
-  void (*unref)(grpc_exec_ctx *exec_ctx, void *);
+  void (*ref)(void*);
+  void (*unref)(grpc_exec_ctx* exec_ctx, void*);
   int (*eq)(grpc_slice a, grpc_slice b);
   uint32_t (*hash)(grpc_slice slice);
 } grpc_slice_refcount_vtable;
@@ -69,15 +54,20 @@ typedef struct grpc_slice_refcount_vtable {
    Typically client code should not touch this, and use grpc_slice_malloc,
    grpc_slice_new, or grpc_slice_new_with_len instead. */
 typedef struct grpc_slice_refcount {
-  const grpc_slice_refcount_vtable *vtable;
+  const grpc_slice_refcount_vtable* vtable;
   /** If a subset of this slice is taken, use this pointer for the refcount.
      Typically points back to the refcount itself, however iterning
      implementations can use this to avoid a verification step on each hash
      or equality check */
-  struct grpc_slice_refcount *sub_refcount;
+  struct grpc_slice_refcount* sub_refcount;
 } grpc_slice_refcount;
 
-#define GRPC_SLICE_INLINED_SIZE (sizeof(size_t) + sizeof(uint8_t *) - 1)
+/* Inlined half of grpc_slice is allowed to expand the size of the overall type
+   by this many bytes */
+#define GRPC_SLICE_INLINE_EXTRA_SIZE sizeof(void*)
+
+#define GRPC_SLICE_INLINED_SIZE \
+  (sizeof(size_t) + sizeof(uint8_t*) - 1 + GRPC_SLICE_INLINE_EXTRA_SIZE)
 
 /** A grpc_slice s, if initialized, represents the byte range
    s.bytes[0..s.length-1].
@@ -89,13 +79,13 @@ typedef struct grpc_slice_refcount {
    If the slice does not have a refcount, it represents an inlined small piece
    of data that is copied by value. */
 struct grpc_slice {
-  struct grpc_slice_refcount *refcount;
-  union {
-    struct {
-      uint8_t *bytes;
+  struct grpc_slice_refcount* refcount;
+  union grpc_slice_data {
+    struct grpc_slice_refcounted {
+      uint8_t* bytes;
       size_t length;
     } refcounted;
-    struct {
+    struct grpc_slice_inlined {
       uint8_t length;
       uint8_t bytes[GRPC_SLICE_INLINED_SIZE];
     } inlined;
@@ -109,10 +99,10 @@ struct grpc_slice {
 typedef struct {
   /** This is for internal use only. External users (i.e any code outside grpc
    * core) MUST NOT use this field */
-  grpc_slice *base_slices;
+  grpc_slice* base_slices;
 
   /** slices in the array (Points to the first valid grpc_slice in the array) */
-  grpc_slice *slices;
+  grpc_slice* slices;
   /** the number of slices in the array */
   size_t count;
   /** the number of slices allocated in the array. External users (i.e any code

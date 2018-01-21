@@ -1,32 +1,17 @@
 #!/bin/bash
-# Copyright 2017, Google Inc.
-# All rights reserved.
+# Copyright 2017 gRPC authors.
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are
-# met:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-#     * Redistributions of source code must retain the above copyright
-# notice, this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above
-# copyright notice, this list of conditions and the following disclaimer
-# in the documentation and/or other materials provided with the
-# distribution.
-#     * Neither the name of Google Inc. nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 # Creates test cases for a language by running run_interop_test in manual mode
 # and save the generated output under ./testcases/<lang>__<release>.
@@ -46,10 +31,6 @@ TESTCASES_DIR=${GRPC_ROOT}/tools/interop_matrix/testcases
 
 echo "Create '$LANG' test cases for gRPC release '${RELEASE:=master}'"
 
-# Invoke run_interop_test in manual mode.
-${GRPC_ROOT}/tools/run_tests/run_interop_tests.py -l $LANG --use_docker \
-  --cloud_to_prod --manual_run
-
 # Clean up
 function cleanup {
   [ -z "$testcase" ] && testcase=$CMDS_SH
@@ -66,12 +47,28 @@ function cleanup {
   fi
   [ -e "$CMDS_SH" ] && rm $CMDS_SH
 }
+
+function createtests {
+# Invoke run_interop_test in manual mode.
+# TODO(adelez): Add cloud_gateways when we figure out how to skip them if not 
+# running in GCE.
+if [ $1 == "cxx" ]; then
+client_lang="c++"
+else
+client_lang=$1
+fi
+echo $client_lang
+
+${GRPC_ROOT}/tools/run_tests/run_interop_tests.py -l $client_lang --use_docker \
+  --cloud_to_prod --prod_servers default gateway_v4 --manual_run
+
 trap cleanup EXIT
+# TODO(adelez): add test auth tests but do not run if not testing on GCE.
 # Running the testcases as sanity unless we are asked to skip.
 [ -z "$SKIP_TEST" ] && (echo "Running test cases: $CMDS_SH"; sh $CMDS_SH)
 
 mkdir -p $TESTCASES_DIR
-testcase=$TESTCASES_DIR/${LANG}__$RELEASE
+testcase=$TESTCASES_DIR/$1__$RELEASE
 if [ -e $testcase ]; then
   echo "Updating: $testcase"
   diff $testcase $CMDS_SH || true
@@ -79,3 +76,11 @@ fi
 mv $CMDS_SH $testcase
 chmod a+x $testcase
 echo "Test cases created: $testcase"
+}
+
+if [ $LANG == "csharp" ]; then
+createtests "csharp"
+createtests "csharpcoreclr"
+else
+createtests $LANG
+fi 

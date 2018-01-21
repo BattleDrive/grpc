@@ -113,3 +113,4 @@ already been built and run. In that case use the --old flag to pass in the name
 of the baseline. This will only build and run the current branch. For example:
 
 `tools/profiling/microbenchmarks/bm_diff/bm_main.py -b bm_error -l 5 -o old`
+

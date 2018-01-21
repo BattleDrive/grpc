@@ -1,33 +1,18 @@
 #!/usr/bin/env python2.7
 #
-# Copyright 2017, Google Inc.
-# All rights reserved.
+# Copyright 2017 gRPC authors.
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are
-# met:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-#     * Redistributions of source code must retain the above copyright
-# notice, this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above
-# copyright notice, this list of conditions and the following disclaimer
-# in the documentation and/or other materials provided with the
-# distribution.
-#     * Neither the name of Google Inc. nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """ Runs the entire bm_*.py pipeline, and possible comments on the PR """
 
@@ -38,6 +23,7 @@ import bm_diff
 
 import sys
 import os
+import random
 import argparse
 import multiprocessing
 import subprocess
@@ -46,6 +32,12 @@ sys.path.append(
   os.path.join(
     os.path.dirname(sys.argv[0]), '..', '..', 'run_tests', 'python_utils'))
 import comment_on_pr
+
+sys.path.append(
+  os.path.join(
+    os.path.dirname(sys.argv[0]), '..', '..', '..', 'run_tests',
+    'python_utils'))
+import jobset
 
 
 def _args():
@@ -78,15 +70,15 @@ def _args():
     help='Name of baseline run to compare to. Ususally just called "old"')
   argp.add_argument(
     '-r',
-    '--repetitions',
-    type=int,
-    default=1,
-    help='Number of repetitions to pass to the benchmarks')
+    '--regex',
+    type=str,
+    default="",
+    help='Regex to filter benchmarks run')
   argp.add_argument(
     '-l',
     '--loops',
     type=int,
-    default=20,
+    default=10,
     help='Number of times to loops the benchmarks. More loops cuts down on noise'
   )
   argp.add_argument(
@@ -140,10 +132,15 @@ def main(args):
       subprocess.check_call(['git', 'checkout', where_am_i])
       subprocess.check_call(['git', 'submodule', 'update'])
 
-  bm_run.run('new', args.benchmarks, args.jobs, args.loops, args.repetitions, args.counters)
-  bm_run.run(old, args.benchmarks, args.jobs, args.loops, args.repetitions, args.counters)
+  jobs_list = []
+  jobs_list += bm_run.create_jobs('new', args.benchmarks, args.loops, args.regex, args.counters)
+  jobs_list += bm_run.create_jobs(old, args.benchmarks, args.loops, args.regex, args.counters)
 
-  diff, note = bm_diff.diff(args.benchmarks, args.loops, args.track, old,
+  # shuffle all jobs to eliminate noise from GCE CPU drift
+  random.shuffle(jobs_list, random.SystemRandom().random)
+  jobset.run(jobs_list, maxjobs=args.jobs)
+
+  diff, note = bm_diff.diff(args.benchmarks, args.loops, args.regex, args.track, old,
                 'new', args.counters)
   if diff:
     text = '[%s] Performance differences noted:\n%s' % (args.pr_comment_name, diff)

@@ -9,3 +9,7 @@ future), and the corresponding version numbers that used them:
 - 1.2 'g' stands for 'green'
 - 1.3 'g' stands for 'gentle'
 - 1.4 'g' stands for 'gregarious'
+- 1.6 'g' stands for 'garcia'
+- 1.7 'g' stands for 'gambit'
+- 1.8 'g' stands for 'generous'
+- 1.9 'g' stands for 'glossy'

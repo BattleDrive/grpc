@@ -1,31 +1,16 @@
-# Copyright 2016, Google Inc.
-# All rights reserved.
+# Copyright 2016 gRPC authors.
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are
-# met:
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-#     * Redistributions of source code must retain the above copyright
-# notice, this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above
-# copyright notice, this list of conditions and the following disclaimer
-# in the documentation and/or other materials provided with the
-# distribution.
-#     * Neither the name of Google Inc. nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """Test a corner-case at the level of the Cython API."""
 
 import threading
@@ -35,7 +20,7 @@ from grpc._cython import cygrpc
 
 _INFINITE_FUTURE = cygrpc.Timespec(float('+inf'))
 _EMPTY_FLAGS = 0
-_EMPTY_METADATA = cygrpc.Metadata(())
+_EMPTY_METADATA = ()
 
 
 class _ServerDriver(object):
@@ -172,19 +157,17 @@ class ReadSomeButNotAllResponsesTest(unittest.TestCase):
         client_complete_rpc_tag = 'client_complete_rpc_tag'
         with client_condition:
             client_receive_initial_metadata_start_batch_result = (
-                client_call.start_client_batch(
-                    cygrpc.Operations([
-                        cygrpc.operation_receive_initial_metadata(_EMPTY_FLAGS),
-                    ]), client_receive_initial_metadata_tag))
+                client_call.start_client_batch([
+                    cygrpc.ReceiveInitialMetadataOperation(_EMPTY_FLAGS),
+                ], client_receive_initial_metadata_tag))
             client_due.add(client_receive_initial_metadata_tag)
             client_complete_rpc_start_batch_result = (
-                client_call.start_client_batch(
-                    cygrpc.Operations([
-                        cygrpc.operation_send_initial_metadata(_EMPTY_METADATA,
-                                                               _EMPTY_FLAGS),
-                        cygrpc.operation_send_close_from_client(_EMPTY_FLAGS),
-                        cygrpc.operation_receive_status_on_client(_EMPTY_FLAGS),
-                    ]), client_complete_rpc_tag))
+                client_call.start_client_batch([
+                    cygrpc.SendInitialMetadataOperation(_EMPTY_METADATA,
+                                                        _EMPTY_FLAGS),
+                    cygrpc.SendCloseFromClientOperation(_EMPTY_FLAGS),
+                    cygrpc.ReceiveStatusOnClientOperation(_EMPTY_FLAGS),
+                ], client_complete_rpc_tag))
             client_due.add(client_complete_rpc_tag)
 
         server_rpc_event = server_driver.first_event()
@@ -192,12 +175,12 @@ class ReadSomeButNotAllResponsesTest(unittest.TestCase):
         with server_call_condition:
             server_send_initial_metadata_start_batch_result = (
                 server_rpc_event.operation_call.start_server_batch([
-                    cygrpc.operation_send_initial_metadata(_EMPTY_METADATA,
-                                                           _EMPTY_FLAGS),
+                    cygrpc.SendInitialMetadataOperation(_EMPTY_METADATA,
+                                                        _EMPTY_FLAGS),
                 ], server_send_initial_metadata_tag))
             server_send_first_message_start_batch_result = (
                 server_rpc_event.operation_call.start_server_batch([
-                    cygrpc.operation_send_message(b'\x07', _EMPTY_FLAGS),
+                    cygrpc.SendMessageOperation(b'\x07', _EMPTY_FLAGS),
                 ], server_send_first_message_tag))
         server_send_initial_metadata_event = server_call_driver.event_with_tag(
             server_send_initial_metadata_tag)
@@ -206,14 +189,14 @@ class ReadSomeButNotAllResponsesTest(unittest.TestCase):
         with server_call_condition:
             server_send_second_message_start_batch_result = (
                 server_rpc_event.operation_call.start_server_batch([
-                    cygrpc.operation_send_message(b'\x07', _EMPTY_FLAGS),
+                    cygrpc.SendMessageOperation(b'\x07', _EMPTY_FLAGS),
                 ], server_send_second_message_tag))
             server_complete_rpc_start_batch_result = (
                 server_rpc_event.operation_call.start_server_batch([
-                    cygrpc.operation_receive_close_on_server(_EMPTY_FLAGS),
-                    cygrpc.operation_send_status_from_server(
-                        cygrpc.Metadata(()), cygrpc.StatusCode.ok,
-                        b'test details', _EMPTY_FLAGS),
+                    cygrpc.ReceiveCloseOnServerOperation(_EMPTY_FLAGS),
+                    cygrpc.SendStatusFromServerOperation(
+                        (), cygrpc.StatusCode.ok, b'test details',
+                        _EMPTY_FLAGS),
                 ], server_complete_rpc_tag))
         server_send_second_message_event = server_call_driver.event_with_tag(
             server_send_second_message_tag)
@@ -224,10 +207,9 @@ class ReadSomeButNotAllResponsesTest(unittest.TestCase):
         with client_condition:
             client_receive_first_message_tag = 'client_receive_first_message_tag'
             client_receive_first_message_start_batch_result = (
-                client_call.start_client_batch(
-                    cygrpc.Operations([
-                        cygrpc.operation_receive_message(_EMPTY_FLAGS),
-                    ]), client_receive_first_message_tag))
+                client_call.start_client_batch([
+                    cygrpc.ReceiveMessageOperation(_EMPTY_FLAGS),
+                ], client_receive_first_message_tag))
             client_due.add(client_receive_first_message_tag)
         client_receive_first_message_event = client_driver.event_with_tag(
             client_receive_first_message_tag)
