@@ -38,13 +38,6 @@ cdef extern from "grpc/byte_buffer_reader.h":
     pass
 
 
-cdef extern from "grpc/impl/codegen/exec_ctx_fwd.h":
-
-  struct grpc_exec_ctx:
-    # We don't care about the internals
-    pass
-
-
 cdef extern from "grpc/grpc.h":
 
   ctypedef struct grpc_slice:
@@ -171,7 +164,7 @@ cdef extern from "grpc/grpc.h":
 
   ctypedef struct grpc_arg_pointer_vtable:
     void *(*copy)(void *)
-    void (*destroy)(grpc_exec_ctx *, void *)
+    void (*destroy)(void *)
     int (*cmp)(void *, void *)
 
   ctypedef struct grpc_arg_value_pointer:

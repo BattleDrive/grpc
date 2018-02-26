@@ -123,74 +123,6 @@ class CompressionLevel:
   high = GRPC_COMPRESS_LEVEL_HIGH
 
 
-cdef class Timespec:
-
-  def __cinit__(self, time):
-    if time is None:
-      with nogil:
-        self.c_time = gpr_now(GPR_CLOCK_REALTIME)
-      return
-    if isinstance(time, int):
-      time = float(time)
-    if isinstance(time, float):
-      if time == float("+inf"):
-        with nogil:
-          self.c_time = gpr_inf_future(GPR_CLOCK_REALTIME)
-      elif time == float("-inf"):
-        with nogil:
-          self.c_time = gpr_inf_past(GPR_CLOCK_REALTIME)
-      else:
-        self.c_time.seconds = time
-        self.c_time.nanoseconds = (time - float(self.c_time.seconds)) * 1e9
-        self.c_time.clock_type = GPR_CLOCK_REALTIME
-    elif isinstance(time, Timespec):
-      self.c_time = (<Timespec>time).c_time
-    else:
-      raise TypeError("expected time to be float, int, or Timespec, not {}"
-                          .format(type(time)))
-
-  @property
-  def seconds(self):
-    # TODO(atash) ensure that everywhere a Timespec is created that it's
-    # converted to GPR_CLOCK_REALTIME then and not every time someone wants to
-    # read values off in Python.
-    cdef gpr_timespec real_time
-    with nogil:
-      real_time = (
-          gpr_convert_clock_type(self.c_time, GPR_CLOCK_REALTIME))
-    return real_time.seconds
-
-  @property
-  def nanoseconds(self):
-    cdef gpr_timespec real_time = (
-        gpr_convert_clock_type(self.c_time, GPR_CLOCK_REALTIME))
-    return real_time.nanoseconds
-
-  def __float__(self):
-    cdef gpr_timespec real_time = (
-        gpr_convert_clock_type(self.c_time, GPR_CLOCK_REALTIME))
-    return <double>real_time.seconds + <double>real_time.nanoseconds / 1e9
-
-  def __richcmp__(Timespec self not None, Timespec other not None, int op):
-    cdef gpr_timespec self_c_time = self.c_time
-    cdef gpr_timespec other_c_time = other.c_time
-    cdef int result = gpr_time_cmp(self_c_time, other_c_time)
-    if op == 0:  # <
-      return result < 0
-    elif op == 2:  # ==
-      return result == 0
-    elif op == 4:  # >
-      return result > 0
-    elif op == 1:  # <=
-      return result <= 0
-    elif op == 3:  # !=
-      return result != 0
-    elif op == 5:  # >=
-      return result >= 0
-    else:
-      raise ValueError('__richcmp__ `op` contract violated')
-
-
 cdef class CallDetails:
 
   def __cinit__(self):
@@ -213,53 +145,7 @@ cdef class CallDetails:
 
   @property
   def deadline(self):
-    timespec = Timespec(float("-inf"))
-    timespec.c_time = self.c_details.deadline
-    return timespec
-
-
-cdef class OperationTag:
-
-  def __cinit__(self, user_tag, operations):
-    self.user_tag = user_tag
-    self.references = []
-    self._operations = operations
-
-  cdef void store_ops(self):
-    self.c_nops = 0 if self._operations is None else len(self._operations)
-    if 0 < self.c_nops:
-      self.c_ops = <grpc_op *>gpr_malloc(sizeof(grpc_op) * self.c_nops)
-      for index, operation in enumerate(self._operations):
-        (<Operation>operation).c()
-        self.c_ops[index] = (<Operation>operation).c_op
-
-  cdef object release_ops(self):
-    if 0 < self.c_nops:
-      for index, operation in enumerate(self._operations):
-        (<Operation>operation).c_op = self.c_ops[index]
-        (<Operation>operation).un_c()
-      gpr_free(self.c_ops)
-      return self._operations
-    else:
-      return ()
-
-
-cdef class Event:
-
-  def __cinit__(self, grpc_completion_type type, bint success,
-                object tag, Call operation_call,
-                CallDetails request_call_details,
-                object request_metadata,
-                bint is_new_request,
-                object batch_operations):
-    self.type = type
-    self.success = success
-    self.tag = tag
-    self.operation_call = operation_call
-    self.request_call_details = request_call_details
-    self.request_metadata = request_metadata
-    self.batch_operations = batch_operations
-    self.is_new_request = is_new_request
+    return _time_from_timespec(self.c_details.deadline)
 
 
 cdef class SslPemKeyCertPair:
@@ -276,7 +162,7 @@ cdef void* copy_ptr(void* ptr):
   return ptr
 
 
-cdef void destroy_ptr(grpc_exec_ctx* ctx, void* ptr):
+cdef void destroy_ptr(void* ptr):
   pass
 
 
